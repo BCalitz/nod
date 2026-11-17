@@ -3,6 +3,7 @@ import {
   presentationSchema,
   presentationText,
   type Presentation,
+  type ScheduleRunPresentation,
 } from '../shared/presentation.ts';
 import {
   answerChoicesSchema,
@@ -404,7 +405,12 @@ export async function insertAssistantMessage(
   answerChoices?: AnswerChoices,
   analytics?: CaptureAnalytics,
 ) {
-  const visual = presentation === undefined ? undefined : presentationSchema.parse(presentation);
+  const visual =
+    presentation === undefined
+      ? streamId?.includes('failure:')
+        ? undefined
+        : await scheduleRunNotice(client, turn.turnId, { outcome: 'ran' })
+      : presentationSchema.parse(presentation);
   const choices =
     answerChoices === undefined ? undefined : answerChoicesSchema.parse(answerChoices);
   if (choices) {
@@ -480,7 +486,7 @@ export async function insertAssistantMessage(
       kinds.set(kind, (kinds.get(kind) ?? 0) + 1);
     }
     afterCommit(client, () => {
-      if (visual && visual.type !== 'bug-report')
+      if (visual && visual.type !== 'bug-report' && visual.type !== 'schedule-run')
         analytics({
           event: 'output_created',
           properties: { presentation_kind: visual.type, count: 1 },
@@ -1267,7 +1273,64 @@ function offlineFailure(error: unknown, provider: string | undefined) {
   if (!code) return;
   const name =
     (modelProviderNames as Record<string, string>)[provider ?? ''] ?? 'the model provider';
-  return `Nod couldn't reach ${name} because this computer had no internet connection (${code}).`;
+  return {
+    reason: `Nod couldn't reach ${name} because this computer had no internet connection`,
+    code,
+  };
+}
+
+let scheduleRunNotices = false;
+
+async function scheduleRunNotice(
+  client: PoolClient,
+  turnId: string,
+  run: Pick<ScheduleRunPresentation, 'outcome' | 'reason' | 'code' | 'link'>,
+) {
+  scheduleRunNotices ||= Boolean(
+    (
+      await client.query(
+        "SELECT 1 FROM pg_attribute WHERE attrelid=to_regclass('schedule_runs') AND attname='notice_shown'",
+      )
+    ).rowCount,
+  );
+  if (!scheduleRunNotices) return;
+  const row = (
+    await client.query<{
+      scheduleId: string;
+      revision: number;
+      title: string;
+      dueAt: Date;
+      startedAt: Date;
+      skipped: ScheduleRunPresentation['skipped'];
+      timeZone: string;
+      nextRunAt: Date | null;
+    }>(
+      `UPDATE schedule_runs r SET notice_shown=true FROM turns u, schedules s
+       WHERE u.id=$1 AND u.owner_id=$2 AND r.owner_id=u.owner_id AND r.turn_id=u.session_id AND NOT r.notice_shown
+         AND s.id=r.schedule_id AND s.owner_id=r.owner_id
+         AND ${run.outcome === 'failed' ? 'u.id=u.session_id' : "(jsonb_array_length(r.skipped)>0 OR r.created_at-r.scheduled_for>interval '10 minutes')"}
+       RETURNING r.schedule_id AS "scheduleId",s.revision,r.title,r.scheduled_for AS "dueAt",r.created_at AS "startedAt",
+         r.skipped,r.time_zone AS "timeZone",CASE WHEN s.enabled THEN s.next_run_at END AS "nextRunAt"`,
+      [turnId, ownerId],
+    )
+  ).rows[0];
+  if (!row) return;
+  return presentationSchema.parse({
+    version: 1,
+    type: 'schedule-run',
+    title: row.title.slice(0, 120),
+    sources: [],
+    scheduleId: row.scheduleId,
+    revision: row.revision,
+    dueAt: row.dueAt.toISOString(),
+    startedAt: row.startedAt.toISOString(),
+    skipped: row.skipped,
+    timeZone: row.timeZone,
+    ...(run.outcome === 'failed' && row.nextRunAt
+      ? { nextRunAt: row.nextRunAt.toISOString() }
+      : {}),
+    ...Object.fromEntries(Object.entries(run).filter(([, value]) => value !== undefined)),
+  });
 }
 
 function failureText(error: unknown) {
@@ -1287,7 +1350,13 @@ async function failTurn(
     next,
     failure,
     contextExhausted,
-  }: { next?: string; failure?: 'model' | 'offline' | 'unknown'; contextExhausted?: boolean } = {},
+    cause,
+  }: {
+    next?: string;
+    failure?: 'model' | 'offline' | 'unknown';
+    contextExhausted?: boolean;
+    cause?: Pick<ScheduleRunPresentation, 'reason' | 'code' | 'link'>;
+  } = {},
 ) {
   const modelFailure = failure === 'model' || failure === 'offline';
   const failureStream = contextExhausted
@@ -1387,7 +1456,18 @@ async function failTurn(
         'Nod stopped on an unexpected error while working on a request.',
         streamId,
       );
-    else await insertAssistantMessage(client, ref, message.trim(), [], streamId);
+    else
+      await insertAssistantMessage(
+        client,
+        ref,
+        message.trim(),
+        [],
+        streamId,
+        undefined,
+        modelFailure && cause
+          ? await scheduleRunNotice(client, turnId, { outcome: 'failed', ...cause })
+          : undefined,
+      );
   }, pool);
   return true;
 }
@@ -2433,16 +2513,19 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
     } else {
       const offline = offlineFailure(error, selectedModel?.provider);
       failure = offline ? 'offline' : error instanceof ModelRequestError ? 'model' : 'unknown';
+      const text = offline ? `${offline.reason} (${offline.code}).` : failureText(error);
+      const alternative = failure === 'model' ? dependencies.modelAlternative?.() : undefined;
+      const server = Boolean(offline && dependencies.desktopRuntime);
       if (
-        await failTurn(turnId, dependencies.present, offline ?? failureText(error), {
+        await failTurn(turnId, dependencies.present, text, {
           failure,
-          next:
-            failure === 'model'
-              ? dependencies.modelAlternative?.()
-              : failure === 'offline' && dependencies.desktopRuntime
-                ? offlineHint
-                : undefined,
+          next: alternative ?? (server ? offlineHint : undefined),
           contextExhausted: error instanceof ContextLimitError,
+          cause: offline
+            ? { ...offline, ...(server ? { link: 'server' as const } : {}) }
+            : failure === 'model'
+              ? { reason: [text, alternative].filter(Boolean).join(' '), link: 'models' }
+              : undefined,
         })
       )
         logFailure('turn_failed', error, { threadId, turnId, sessionId: turn.session_id });

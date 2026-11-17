@@ -10561,12 +10561,27 @@ test(
                 provider: item.provider ?? 'anthropic',
                 name: 'fixture-model',
               });
+              const scheduleId = randomUUID();
               const turnId = item.chat
                 ? (await thread.submitUserMessage(item.prompt)).turnId
-                : await thread.enqueueTurn(item.prompt, {
-                    source: 'schedule',
-                    sourceId: `schedule:offline:${randomUUID()}:1`,
-                  });
+                : await transaction(async (client) => {
+                    await client.query(
+                      `INSERT INTO schedules(id,owner_id,title,prompt,cron,time_zone,next_run_at)
+                       VALUES($1,$2,$3,$4,'0 8 * * *','Europe/Lisbon',now()+interval '1 day')`,
+                      [scheduleId, ownerId, item.prompt, item.prompt],
+                    );
+                    const id = await thread.enqueueTurn(item.prompt, {
+                      source: 'schedule',
+                      sourceId: `schedule:${scheduleId}:${randomUUID()}`,
+                      client,
+                    });
+                    await client.query(
+                      `INSERT INTO schedule_runs(id,owner_id,schedule_id,schedule_revision,job_id,title,turn_id,scheduled_for,time_zone)
+                       VALUES($1,$2,$3,0,$4,$5,$6,now()-interval '72 minutes','Europe/Lisbon')`,
+                      [randomUUID(), ownerId, scheduleId, randomUUID(), item.prompt, id],
+                    );
+                    return id;
+                  }, db.pool);
               await waitFor(settled(turnId));
               const streamId = `${item.provider ? 'model' : 'offline'}-failure:${turnId}`;
               await waitFor(async () =>
@@ -10582,13 +10597,38 @@ test(
               const turn = (
                 await db.pool.query('SELECT status,error FROM turns WHERE id=$1', [turnId])
               ).rows[0] as { status: string; error: string };
-              const shown = (
+              const { text: shown, presentation } = (
                 await db.pool.query(
-                  "SELECT text FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",
+                  "SELECT text,presentation FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",
                   [turnId, streamId],
                 )
-              ).rows[0].text as string;
+              ).rows[0] as { text: string; presentation: Record<string, unknown> | null };
               const hinted = /\]\(https:\/\/nod\.n8n\.io\/docs\/deploy\/self-host\/\)/;
+              if (item.chat) assert.equal(presentation, null);
+              else
+                assert.deepEqual(
+                  {
+                    type: presentation?.type,
+                    scheduleId: presentation?.scheduleId,
+                    outcome: presentation?.outcome,
+                    code: presentation?.code,
+                    link: presentation?.link,
+                    late:
+                      Date.parse(String(presentation?.startedAt)) -
+                        Date.parse(String(presentation?.dueAt)) >
+                      600_000,
+                    next: typeof presentation?.nextRunAt,
+                  },
+                  {
+                    type: 'schedule-run',
+                    scheduleId,
+                    outcome: 'failed',
+                    code: item.provider ? undefined : item.code,
+                    link: item.provider ? 'models' : item.desktop ? 'server' : undefined,
+                    late: true,
+                    next: 'string',
+                  },
+                );
               assert.equal(turn.status, 'failed');
               assert.ok(shown.includes(turn.error));
               if (item.provider) {

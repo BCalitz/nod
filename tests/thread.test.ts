@@ -10543,6 +10543,12 @@ test(
               desktop: true,
               provider: 'compatible',
             },
+            {
+              prompt: 'offline azure endpoint schedule fixture',
+              code: 'EAI_AGAIN',
+              desktop: true,
+              provider: 'azure',
+            },
           ];
           const previousWorkModel = dependencies.workModel;
           try {

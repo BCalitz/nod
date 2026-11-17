@@ -425,18 +425,13 @@ export function mapLocationUrl(place: { latitude: number; longitude: number }) {
 }
 
 export function presentationText(value: Presentation) {
+  if (value.type === 'schedule-run') return '';
   const lines = [value.title];
   if (value.caption) lines.push(value.caption);
   if (value.asOf) lines.push(value.asOf);
   if (value.type === 'image') lines.push(value.alt);
   if (value.type === 'apps') lines.push(`Connect in Apps: ${value.services.join(', ')}`);
   if (value.type === 'bug-report') lines.push(value.summary, '', bugReportReplyHint);
-  if (value.type === 'schedule-run')
-    lines.push(
-      value.outcome === 'failed'
-        ? `Scheduled run due ${value.dueAt} didn't run. ${value.reason ?? ''}`.trim()
-        : `Scheduled run due ${value.dueAt} started ${value.startedAt}.${value.skipped.length ? ` ${value.skipped.length} earlier runs were skipped.` : ''}`,
-    );
   if (value.type === 'map')
     for (const place of value.places)
       lines.push(

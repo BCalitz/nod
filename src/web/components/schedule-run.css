@@ -91,7 +91,7 @@
   border-radius: var(--radius-full);
   background: var(--surface);
 }
-[data-state='missed'] > .schedule-run-mark {
+:is([data-state='missed'], [data-state='due']) > .schedule-run-mark {
   border: 2px solid color-mix(in srgb, var(--muted-foreground) 55%, transparent);
 }
 [data-state='failed'] > .schedule-run-mark {
@@ -109,7 +109,7 @@
   font-size: 12px;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  padding-right: 6px;
 }
 [data-state='failed'] > .schedule-run-time {
   color: var(--error);
@@ -161,7 +161,7 @@
 .schedule-run-error {
   flex: 1 1 100%;
   margin: 0;
-  color: var(--destructive);
+  color: var(--error);
   font-size: 13px;
   line-height: 18px;
 }
@@ -169,6 +169,5 @@
   display: none;
 }
 [data-state='gap'] > .schedule-run-mark {
-  width: 12px;
   background: none;
 }

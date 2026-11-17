@@ -1267,7 +1267,10 @@ const offlineCause =
 const offlineHint = `Scheduled tasks run only while this computer is awake and online. To keep them running while it sleeps, [run Nod on a server](https://nod.n8n.io/docs/deploy/self-host/).`;
 
 function offlineFailure(error: unknown, provider: string | undefined) {
-  if (!(error instanceof ModelRequestError) || provider === 'compatible' || provider === 'azure')
+  if (
+    !(error instanceof ModelRequestError) ||
+    ['compatible', 'azure', 'amazon-bedrock'].includes(String(provider))
+  )
     return;
   const code = offlineCause.exec(error.message)?.[1];
   if (!code) return;
@@ -1309,7 +1312,7 @@ async function scheduleRunNotice(
        WHERE u.id=$1 AND u.owner_id=$2 AND r.owner_id=u.owner_id AND r.turn_id=u.session_id AND NOT r.notice_shown
          AND s.id=r.schedule_id AND s.owner_id=r.owner_id
          AND ${run.outcome === 'failed' ? 'u.id=u.session_id' : "(jsonb_array_length(r.skipped)>0 OR r.created_at-r.scheduled_for>interval '10 minutes')"}
-       RETURNING r.schedule_id AS "scheduleId",s.revision,r.title,r.scheduled_for AS "dueAt",r.created_at AS "startedAt",
+       RETURNING r.schedule_id AS "scheduleId",r.schedule_revision AS revision,r.title,r.scheduled_for AS "dueAt",r.created_at AS "startedAt",
          r.skipped,r.time_zone AS "timeZone",CASE WHEN s.enabled THEN s.next_run_at END AS "nextRunAt"`,
       [turnId, ownerId],
     )

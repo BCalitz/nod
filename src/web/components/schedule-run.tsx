@@ -91,30 +91,39 @@ function RunNow({ run }: { run: ScheduleRunPresentation }) {
 export function ScheduleRunTrack({ run }: { run: ScheduleRunPresentation }) {
   const format = useDateFormat();
   const zoned = { ...format, timeZone: run.timeZone };
-  const time = (value: string) => formatTime(value, zoned);
   const failed = run.outcome === 'failed';
   const late = Date.parse(run.startedAt) - Date.parse(run.dueAt) > lateAfterMs;
-  const skips = run.skipped
-    .map((skip) => ({ at: skip.at, state: 'missed', label: '' }))
-    .sort((first, second) => Date.parse(first.at) - Date.parse(second.at));
-  const shown = late ? 1 : 3;
-  const hidden = skips.length - shown;
-  const marks = [
-    ...(late ? [{ at: run.dueAt, state: 'missed', label: 'Due' }] : []),
-    ...(hidden > 0 ? [{ at: '', state: 'gap', label: `+${hidden}` }] : []),
-    ...skips.slice(-shown),
-  ];
   const final = {
     at: late ? run.startedAt : run.dueAt,
     state: failed ? 'failed' : 'ran',
     label: late ? (failed ? 'Tried' : 'Ran') : 'Due',
   };
+  const day = (value: string) =>
+    new Intl.DateTimeFormat('en-CA', { timeZone: run.timeZone }).format(new Date(value));
+  const time = (value: string) =>
+    day(value) === day(final.at)
+      ? formatTime(value, zoned)
+      : formatDateTime(value, format, { timeZone: run.timeZone, weekday: true });
+  const earlier = [
+    ...run.skipped.map((skip) => ({ at: skip.at, state: 'missed', label: '' })),
+    ...(late ? [{ at: run.dueAt, state: 'due', label: 'Due' }] : []),
+  ].sort((first, second) => Date.parse(first.at) - Date.parse(second.at));
+  const kept = (index: number) =>
+    index === 0 || index === earlier.length - 1 || earlier[index]!.state === 'due';
+  const marks: { at: string; state: string; label: string }[] = [];
+  let hidden = 0;
+  earlier.forEach((mark, index) => {
+    if (!kept(index)) return void hidden++;
+    if (hidden) marks.push({ at: '', state: 'gap', label: `+${hidden}` });
+    hidden = 0;
+    marks.push(mark);
+  });
   const skipped = skippedText(run);
   return (
     <section
       className="schedule-run-track"
       data-outcome={run.outcome}
-      aria-label={failed ? `${run.title} didn't run` : `${run.title} ran late`}
+      aria-label={failed ? `${run.title} didn't run` : `${run.title} ran`}
     >
       <header className="schedule-run-track-header">
         <Repeat size={14} aria-hidden="true" />
@@ -135,7 +144,9 @@ export function ScheduleRunTrack({ run }: { run: ScheduleRunPresentation }) {
                     ? ', ran'
                     : mark.state === 'gap'
                       ? ' more skipped runs'
-                      : ', skipped'}
+                      : mark.state === 'due'
+                        ? ''
+                        : ', skipped'}
               </span>
             </span>
           </li>
@@ -143,10 +154,7 @@ export function ScheduleRunTrack({ run }: { run: ScheduleRunPresentation }) {
         {failed && run.nextRunAt && (
           <li data-state="next">
             <span className="schedule-run-mark" aria-hidden="true" />
-            <span className="schedule-run-time">
-              Next{' '}
-              {formatDateTime(run.nextRunAt, format, { timeZone: run.timeZone, weekday: true })}
-            </span>
+            <span className="schedule-run-time">Next {time(run.nextRunAt)}</span>
           </li>
         )}
       </ol>

@@ -491,8 +491,9 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       if (busy) return true;
       if (row.kind === 'recurring' && dependencies.modelPaused?.(row.model)) {
         await client.query(
-          `UPDATE schedules SET skipped=skipped||jsonb_build_array(jsonb_build_object('at',$3::text,'reason','paused'))
-           WHERE id=$1 AND owner_id=$2 AND jsonb_array_length(skipped)<$4`,
+          `UPDATE schedules SET skipped=(CASE WHEN jsonb_array_length(skipped)>=$4 THEN skipped-0 ELSE skipped END)
+             ||jsonb_build_array(jsonb_build_object('at',$3::text,'reason','paused'))
+           WHERE id=$1 AND owner_id=$2`,
           [row.id, ownerId, row.nextRun!.toISOString(), skippedCountLimit],
         );
         return true;
@@ -566,7 +567,8 @@ export function createSchedules(dependencies: ScheduleDependencies) {
       ALTER TABLE schedules ADD COLUMN IF NOT EXISTS model jsonb;
       ALTER TABLE schedules ADD COLUMN IF NOT EXISTS skipped jsonb NOT NULL DEFAULT '[]'::jsonb;
       ALTER TABLE schedule_runs ADD COLUMN IF NOT EXISTS skipped jsonb NOT NULL DEFAULT '[]'::jsonb,
-        ADD COLUMN IF NOT EXISTS notice_shown boolean NOT NULL DEFAULT false;
+        ADD COLUMN IF NOT EXISTS notice_shown boolean NOT NULL DEFAULT true;
+      ALTER TABLE schedule_runs ALTER COLUMN notice_shown SET DEFAULT false;
       ALTER TABLE schedule_runs ADD COLUMN IF NOT EXISTS baseline_observation jsonb,
         ADD COLUMN IF NOT EXISTS observation jsonb, ADD COLUMN IF NOT EXISTS observed_at timestamptz;
       CREATE INDEX IF NOT EXISTS schedule_runs_owner_time ON schedule_runs(owner_id,created_at DESC,id DESC);
@@ -1158,7 +1160,7 @@ export function createSchedules(dependencies: ScheduleDependencies) {
           `UPDATE schedules SET title=$3,prompt=$4,kind=$5,cron=$6,run_at=$7,time_zone=$8,
              enabled=$9,authority=$10::jsonb,
              baseline_observation=COALESCE($11::jsonb,baseline_observation),
-             watch=CASE WHEN $12 THEN $13::jsonb ELSE watch END,revision=revision+1 WHERE id=$1 AND owner_id=$2 RETURNING ${columns}`,
+             watch=CASE WHEN $12 THEN $13::jsonb ELSE watch END,skipped='[]'::jsonb,revision=revision+1 WHERE id=$1 AND owner_id=$2 RETURNING ${columns}`,
           [
             id,
             ownerId,

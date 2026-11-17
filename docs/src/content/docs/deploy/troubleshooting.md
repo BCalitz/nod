@@ -185,7 +185,7 @@ The bot was set up with a webhook elsewhere. Remove that webhook to use local po
 
 For a local desktop assistant, scheduled tasks run only while Nod is open and your computer is awake. Closing the window keeps Nod running in the menu bar or tray, but **Quit Nod** stops it. **Open at login** is on after setup; keep it on in **Settings → General** if you rely on schedules. After a restart or power cut, Nod starts only once you sign in to your computer, and a Mac with FileVault turned on never signs in automatically. For a remote assistant, check that the server is running; closing a desktop client does not stop its schedules.
 
-A run that starts while the computer has no internet connection, such as right after it wakes, fails with "This computer had no internet connection" and a code such as `ENOTFOUND`. Nod doesn't run it again on its own; the next run starts as scheduled. To keep schedules running while your computer sleeps, [run Nod on a server](/deploy/self-host/).
+A run that starts while the computer has no internet connection, such as right after it wakes, fails with "This computer had no internet connection" and a code such as `ENOTFOUND`. OpenAI-compatible and Azure OpenAI connections keep their usual error, because their address may be wrong. Nod doesn't run it again on its own; the next run starts as scheduled. To keep schedules running while your computer sleeps, [run Nod on a server](/deploy/self-host/).
 
 ### An action shows as uncertain
 

@@ -10529,7 +10529,12 @@ test(
           const prefix = 'The model request failed: anthropic / fixture-model: Connection error.';
           const cases = [
             { prompt: 'offline desktop schedule fixture', code: 'ENOTFOUND', desktop: true },
-            { prompt: 'offline desktop chat fixture', code: 'EAI_AGAIN', desktop: true },
+            {
+              prompt: 'offline desktop chat fixture',
+              code: 'EAI_AGAIN',
+              desktop: true,
+              chat: true,
+            },
             { prompt: 'offline server schedule fixture', code: 'ENETUNREACH', desktop: false },
             {
               prompt: 'offline owner endpoint schedule fixture',
@@ -10549,7 +10554,7 @@ test(
                 provider: item.provider ?? 'anthropic',
                 name: 'fixture-model',
               });
-              const turnId = item.prompt.includes('chat')
+              const turnId = item.chat
                 ? (await thread.submitUserMessage(item.prompt)).turnId
                 : await thread.enqueueTurn(item.prompt, {
                     source: 'schedule',
@@ -10589,7 +10594,7 @@ test(
               assert.ok(turn.error.includes(`(${item.code})`));
               assert.doesNotMatch(turn.error, /transport cause|request phase/);
               assert.doesNotMatch(shown, /settings\/models|Synthetic alternative connection/);
-              if (item.desktop && !item.prompt.includes('chat')) assert.match(shown, hinted);
+              if (item.desktop && !item.chat) assert.match(shown, hinted);
               else assert.doesNotMatch(shown, hinted);
             }
           } finally {

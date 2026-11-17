@@ -10526,7 +10526,8 @@ test(
         'a model request that found no network states that cause instead of model settings',
         async () => {
           dependencies.modelAlternative = () => 'Synthetic alternative connection.';
-          const prefix = 'The model request failed: anthropic / fixture-model: Connection error.';
+          const prefix =
+            'The model request failed: anthropic / fixture-model: Connection error.: getaddrinfo ENOTFOUND synthetic-offline.invalid';
           const cases = [
             { prompt: 'offline desktop schedule fixture', code: 'ENOTFOUND', desktop: true },
             {
@@ -10561,7 +10562,7 @@ test(
                     sourceId: `schedule:offline:${randomUUID()}:1`,
                   });
               await waitFor(settled(turnId));
-              const streamId = `model-failure:${turnId}`;
+              const streamId = `${item.provider ? 'model' : 'offline'}-failure:${turnId}`;
               await waitFor(async () =>
                 Boolean(
                   (
@@ -10590,9 +10591,12 @@ test(
                 assert.doesNotMatch(shown, hinted);
                 continue;
               }
-              assert.ok(turn.error.startsWith(prefix));
+              assert.match(turn.error, /\bAnthropic\b/);
               assert.ok(turn.error.includes(`(${item.code})`));
-              assert.doesNotMatch(turn.error, /transport cause|request phase/);
+              assert.doesNotMatch(
+                turn.error,
+                /transport cause|request phase|getaddrinfo|synthetic-offline/,
+              );
               assert.doesNotMatch(shown, /settings\/models|Synthetic alternative connection/);
               if (item.desktop && !item.chat) assert.match(shown, hinted);
               else assert.doesNotMatch(shown, hinted);

@@ -67,7 +67,7 @@ import { inlineAppResult, noMailCheck, type MailCheck } from './integration-resu
 import { saveIntegrationFiles } from './integration-files.ts';
 import { spendingLimitReached, spendingLimitText } from './ledger.ts';
 import type { ExecutionEvent } from '../shared/execution.ts';
-import type { ModelSelection, WorkKind } from '../shared/models.ts';
+import { modelProviderNames, type ModelSelection, type WorkKind } from '../shared/models.ts';
 import { lockKey } from './locks.ts';
 import { redactSecretText } from './redaction.ts';
 import { resemblesTaskAcknowledgement } from '../shared/task-ack.ts';
@@ -1257,18 +1257,22 @@ function modelRecoveryAdvice(text: string) {
 }
 
 const offlineCause =
-  /([.!?])?\s*\(transport cause: (ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENETDOWN)\)\s*\[request phase: [^\]]*\]$/;
+  /\(transport cause: (ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENETDOWN)\)\s*\[request phase: [^\]]*\]$/;
 const offlineHint = `Scheduled tasks run only while this computer is awake and online. To keep them running while it sleeps, [run Nod on a server](https://nod.n8n.io/docs/deploy/self-host/).`;
 
-function failureText(error: unknown, offline = false) {
+function offlineFailure(error: unknown, provider: string | undefined) {
+  if (!(error instanceof ModelRequestError) || provider === 'compatible' || provider === 'azure')
+    return;
+  const code = offlineCause.exec(error.message)?.[1];
+  if (!code) return;
+  const name =
+    (modelProviderNames as Record<string, string>)[provider ?? ''] ?? 'the model provider';
+  return `Nod couldn't reach ${name} because this computer had no internet connection (${code}).`;
+}
+
+function failureText(error: unknown) {
   let text = error instanceof Error ? error.message || error.name : String(error);
   if (error instanceof ModelRequestError) text = modelFailureReason(text);
-  if (offline)
-    text = text.replace(
-      offlineCause,
-      (_match, end: string | undefined, code: string) =>
-        `${end ?? '.'} This computer had no internet connection (${code}).`,
-    );
   const advice = error instanceof ModelRequestError ? modelRecoveryAdvice(text) : '';
   const safe = redactSecretText(text).trim().slice(0, 2_000);
   if (!advice || safe.length + advice.length >= 2_000) return safe || 'Unknown error.';
@@ -1286,6 +1290,13 @@ async function failTurn(
   }: { next?: string; failure?: 'model' | 'offline' | 'unknown'; contextExhausted?: boolean } = {},
 ) {
   const modelFailure = failure === 'model' || failure === 'offline';
+  const failureStream = contextExhausted
+    ? 'context-failure'
+    : failure === 'offline'
+      ? 'offline-failure'
+      : modelFailure
+        ? 'model-failure'
+        : 'failure';
   const turn = await transaction(async (client) => {
     const thread = await lockThread(client);
     const turn = (
@@ -1359,7 +1370,7 @@ async function failTurn(
         turnId,
         ownerId,
         turn.thread_id,
-        `${contextExhausted ? 'context-failure' : modelFailure ? 'model-failure' : 'failure'}:${turnId}`,
+        `${failureStream}:${turnId}`,
         turn.latest_user_message_id,
         Boolean(turn.task_id || work),
         error,
@@ -1367,7 +1378,7 @@ async function failTurn(
     );
     if (!current.rowCount) return;
     const ref = { threadId: turn.thread_id, turnId, taskMessageId: turn.taskMessageId };
-    const streamId = `${contextExhausted ? 'context-failure' : modelFailure ? 'model-failure' : 'failure'}:${turnId}`;
+    const streamId = `${failureStream}:${turnId}`;
     if (failure === 'unknown')
       await insertBugReportDraft(
         client,
@@ -2420,15 +2431,10 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       const limit = await dependencies.spendingLimit?.().catch(() => null);
       await failAtLimit(turnId, limit?.monthlyUsd);
     } else {
-      failure =
-        error instanceof ModelRequestError
-          ? offlineCause.test(error.message) &&
-            !['compatible', 'azure'].includes(String(selectedModel?.provider))
-            ? 'offline'
-            : 'model'
-          : 'unknown';
+      const offline = offlineFailure(error, selectedModel?.provider);
+      failure = offline ? 'offline' : error instanceof ModelRequestError ? 'model' : 'unknown';
       if (
-        await failTurn(turnId, dependencies.present, failureText(error, failure === 'offline'), {
+        await failTurn(turnId, dependencies.present, offline ?? failureText(error), {
           failure,
           next:
             failure === 'model'

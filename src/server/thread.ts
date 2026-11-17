@@ -154,6 +154,7 @@ export interface ThreadDependencies {
     turnId: string,
   ) => Promise<{ selection: ModelSelection; provider: string; name: string } | undefined>;
   modelAlternative?: () => string | undefined;
+  desktopRuntime?: boolean;
   present?: (
     threadId: string,
     input:
@@ -1255,9 +1256,19 @@ function modelRecoveryAdvice(text: string) {
   return `The provider's retry delay is about ${amount} ${unit}${amount === 1 ? '' : 's'}. Check its daily limit or choose another model.`;
 }
 
-function failureText(error: unknown) {
+const offlineCause =
+  /([.!?])?\s*\(transport cause: (ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|ENETDOWN)\)\s*\[request phase: [^\]]*\]$/;
+const offlineHint = `Scheduled tasks run only while this computer is awake and online. To keep them running while it sleeps, [run Nod on a server](https://nod.n8n.io/docs/deploy/self-host/).`;
+
+function failureText(error: unknown, offline = false) {
   let text = error instanceof Error ? error.message || error.name : String(error);
   if (error instanceof ModelRequestError) text = modelFailureReason(text);
+  if (offline)
+    text = text.replace(
+      offlineCause,
+      (_match, end: string | undefined, code: string) =>
+        `${end ?? '.'} This computer had no internet connection (${code}).`,
+    );
   const advice = error instanceof ModelRequestError ? modelRecoveryAdvice(text) : '';
   const safe = redactSecretText(text).trim().slice(0, 2_000);
   if (!advice || safe.length + advice.length >= 2_000) return safe || 'Unknown error.';
@@ -1272,9 +1283,9 @@ async function failTurn(
     next,
     failure,
     contextExhausted,
-  }: { next?: string; failure?: 'model' | 'unknown'; contextExhausted?: boolean } = {},
+  }: { next?: string; failure?: 'model' | 'offline' | 'unknown'; contextExhausted?: boolean } = {},
 ) {
-  const modelFailure = failure === 'model';
+  const modelFailure = failure === 'model' || failure === 'offline';
   const turn = await transaction(async (client) => {
     const thread = await lockThread(client);
     const turn = (
@@ -1330,10 +1341,11 @@ async function failTurn(
       ? presented
       : error === interrupted
         ? `I was interrupted before I finished${work ? ` “${work}”` : ''}. Check anything I may have started before you ask me to continue.`
-        : `I couldn't finish ${work ? `“${work}”` : 'this'}. ${error}${next ? ` ${next}` : ''}`;
-  const message = modelFailure
-    ? `${body}\n\n[Change the model or check its connection in ${appPages['/settings/models']}](/settings/models).`
-    : body;
+        : `I couldn't finish ${work ? `“${work}”` : 'this'}. ${error}${next && (work || failure !== 'offline') ? ` ${next}` : ''}`;
+  const message =
+    failure === 'model'
+      ? `${body}\n\n[Change the model or check its connection in ${appPages['/settings/models']}](/settings/models).`
+      : body;
   await transaction(async (client) => {
     if ((await lockThread(client)).id !== turn.thread_id) return;
     const current = await client.query(
@@ -1735,7 +1747,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
     'failed';
   let waitingReason: 'question' | 'approval' | 'credentials' | undefined;
   let limited = false;
-  let failure: 'model' | 'unknown' = 'unknown';
+  let failure: 'model' | 'offline' | 'unknown' = 'unknown';
   if (work)
     dependencies.analytics?.({
       event: 'turn_started',
@@ -2408,11 +2420,22 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       const limit = await dependencies.spendingLimit?.().catch(() => null);
       await failAtLimit(turnId, limit?.monthlyUsd);
     } else {
-      failure = error instanceof ModelRequestError ? 'model' : 'unknown';
+      failure =
+        error instanceof ModelRequestError
+          ? offlineCause.test(error.message) &&
+            !['compatible', 'azure'].includes(String(selectedModel?.provider))
+            ? 'offline'
+            : 'model'
+          : 'unknown';
       if (
-        await failTurn(turnId, dependencies.present, failureText(error), {
+        await failTurn(turnId, dependencies.present, failureText(error, failure === 'offline'), {
           failure,
-          next: failure === 'model' ? dependencies.modelAlternative?.() : undefined,
+          next:
+            failure === 'model'
+              ? dependencies.modelAlternative?.()
+              : failure === 'offline' && dependencies.desktopRuntime
+                ? offlineHint
+                : undefined,
           contextExhausted: error instanceof ContextLimitError,
         })
       )
@@ -2449,7 +2472,13 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
           queue_duration_ms: Math.max(0, startedAt - new Date(turn.created_at).getTime()),
           ...(waitingReason ? { waiting_reason: waitingReason } : {}),
           ...(outcome === 'failed'
-            ? { failure_reason: limited ? ('spending_limit' as const) : failure }
+            ? {
+                failure_reason: limited
+                  ? ('spending_limit' as const)
+                  : failure === 'offline'
+                    ? 'model'
+                    : failure,
+              }
             : {}),
         },
       });

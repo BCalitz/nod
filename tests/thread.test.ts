@@ -10523,6 +10523,85 @@ test(
       );
 
       await t.test(
+        'a model request that found no network states that cause instead of model settings',
+        async () => {
+          dependencies.modelAlternative = () => 'Synthetic alternative connection.';
+          const prefix = 'The model request failed: anthropic / fixture-model: Connection error.';
+          const cases = [
+            { prompt: 'offline desktop schedule fixture', code: 'ENOTFOUND', desktop: true },
+            { prompt: 'offline desktop chat fixture', code: 'EAI_AGAIN', desktop: true },
+            { prompt: 'offline server schedule fixture', code: 'ENETUNREACH', desktop: false },
+            {
+              prompt: 'offline owner endpoint schedule fixture',
+              code: 'ENOTFOUND',
+              desktop: true,
+              provider: 'compatible',
+            },
+          ];
+          const previousWorkModel = dependencies.workModel;
+          try {
+            for (const item of cases) {
+              const raw = `${prefix} (transport cause: ${item.code}) [request phase: request]`;
+              modelErrors.set(item.prompt, raw);
+              dependencies.desktopRuntime = item.desktop;
+              dependencies.workModel = async () => ({
+                selection: { connectionId: randomUUID(), modelId: 'fixture-model', effort: 'low' },
+                provider: item.provider ?? 'anthropic',
+                name: 'fixture-model',
+              });
+              const turnId = item.prompt.includes('chat')
+                ? (await thread.submitUserMessage(item.prompt)).turnId
+                : await thread.enqueueTurn(item.prompt, {
+                    source: 'schedule',
+                    sourceId: `schedule:offline:${randomUUID()}:1`,
+                  });
+              await waitFor(settled(turnId));
+              const streamId = `model-failure:${turnId}`;
+              await waitFor(async () =>
+                Boolean(
+                  (
+                    await db.pool.query(
+                      "SELECT 1 FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",
+                      [turnId, streamId],
+                    )
+                  ).rowCount,
+                ),
+              );
+              const turn = (
+                await db.pool.query('SELECT status,error FROM turns WHERE id=$1', [turnId])
+              ).rows[0] as { status: string; error: string };
+              const shown = (
+                await db.pool.query(
+                  "SELECT text FROM messages WHERE turn_id=$1 AND role='assistant' AND stream_id=$2",
+                  [turnId, streamId],
+                )
+              ).rows[0].text as string;
+              const hinted = /\]\(https:\/\/nod\.n8n\.io\/docs\/deploy\/self-host\/\)/;
+              assert.equal(turn.status, 'failed');
+              assert.ok(shown.includes(turn.error));
+              if (item.provider) {
+                assert.equal(turn.error, raw);
+                assert.match(shown, /\]\(\/settings\/models\)/);
+                assert.doesNotMatch(shown, hinted);
+                continue;
+              }
+              assert.ok(turn.error.startsWith(prefix));
+              assert.ok(turn.error.includes(`(${item.code})`));
+              assert.doesNotMatch(turn.error, /transport cause|request phase/);
+              assert.doesNotMatch(shown, /settings\/models|Synthetic alternative connection/);
+              if (item.desktop && !item.prompt.includes('chat')) assert.match(shown, hinted);
+              else assert.doesNotMatch(shown, hinted);
+            }
+          } finally {
+            for (const item of cases) modelErrors.delete(item.prompt);
+            delete dependencies.modelAlternative;
+            delete dependencies.desktopRuntime;
+            dependencies.workModel = previousWorkModel;
+          }
+        },
+      );
+
+      await t.test(
         'a request that failed at the model provider or that the owner stopped is no request for later turns',
         async () => {
           await waitFor(settledThread);

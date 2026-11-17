@@ -2156,6 +2156,7 @@ async function initializeApplication(
           ? `Your ${other.label} connection is also set up: you can switch to it in ${appPages['/settings/models']}.`
           : undefined;
       },
+      desktopRuntime: desktopMode,
       taskClassification: true,
       observeTurn: (turnId, operation) =>
         analytics

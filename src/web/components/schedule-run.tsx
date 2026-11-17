@@ -108,8 +108,9 @@ export function ScheduleRunTrack({ run }: { run: ScheduleRunPresentation }) {
     ...run.skipped.map((skip) => ({ at: skip.at, state: 'missed', label: '' })),
     ...(late ? [{ at: run.dueAt, state: 'due', label: 'Due' }] : []),
   ].sort((first, second) => Date.parse(first.at) - Date.parse(second.at));
+  const latest = earlier.findLastIndex((mark) => mark.state !== 'due');
   const kept = (index: number) =>
-    index === 0 || index === earlier.length - 1 || earlier[index]!.state === 'due';
+    index === 0 || index === latest || earlier[index]!.state === 'due';
   const marks: { at: string; state: string; label: string }[] = [];
   let hidden = 0;
   earlier.forEach((mark, index) => {

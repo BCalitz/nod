@@ -10549,6 +10549,12 @@ test(
               desktop: true,
               provider: 'azure',
             },
+            {
+              prompt: 'offline bedrock schedule fixture',
+              code: 'ENOTFOUND',
+              desktop: true,
+              provider: 'amazon-bedrock',
+            },
           ];
           const previousWorkModel = dependencies.workModel;
           try {
@@ -10566,8 +10572,8 @@ test(
                 ? (await thread.submitUserMessage(item.prompt)).turnId
                 : await transaction(async (client) => {
                     await client.query(
-                      `INSERT INTO schedules(id,owner_id,title,prompt,cron,time_zone,next_run_at)
-                       VALUES($1,$2,$3,$4,'0 8 * * *','Europe/Lisbon',now()+interval '1 day')`,
+                      `INSERT INTO schedules(id,owner_id,title,prompt,cron,time_zone,next_run_at,revision)
+                       VALUES($1,$2,$3,$4,'0 8 * * *','Europe/Lisbon',now()+interval '1 day',3)`,
                       [scheduleId, ownerId, item.prompt, item.prompt],
                     );
                     const id = await thread.enqueueTurn(item.prompt, {
@@ -10618,6 +10624,7 @@ test(
                         Date.parse(String(presentation?.dueAt)) >
                       600_000,
                     next: typeof presentation?.nextRunAt,
+                    revision: presentation?.revision,
                   },
                   {
                     type: 'schedule-run',
@@ -10627,6 +10634,7 @@ test(
                     link: item.provider ? 'models' : item.desktop ? 'server' : undefined,
                     late: true,
                     next: 'string',
+                    revision: 0,
                   },
                 );
               assert.equal(turn.status, 'failed');

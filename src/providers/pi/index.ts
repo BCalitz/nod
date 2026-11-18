@@ -1014,9 +1014,7 @@ export function createPiAgent(options: {
         modelRuntime: runtime,
         model: sessionModel,
         thinkingLevel:
-          input.quick && !['off', 'minimal'].includes(access?.effort ?? '')
-            ? 'low'
-            : (access?.effort ?? 'high'),
+          input.quick && access?.effort !== 'off' ? 'minimal' : (access?.effort ?? 'high'),
         tools: directTools.map((name) => `+${name}`),
         customTools: tools,
         noTools: 'builtin',

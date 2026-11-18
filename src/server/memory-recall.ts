@@ -92,7 +92,9 @@ export function createMemoryRecall(options: {
       });
     if (!notes.length && !recent.length && !context.relatedConversation?.length) return;
     const fallback = await options.memory.find({ query: context.prompt });
-    const selectionDeadline = AbortSignal.timeout(1_000);
+    const selectionDeadline = context.speech?.call
+      ? AbortSignal.abort()
+      : AbortSignal.timeout(1_000);
     const parsed = planSchema.safeParse(
       options.curator.configured && canContinue()
         ? await ask(

@@ -47,6 +47,25 @@ function keepClip(owner: string, audio: GeneratedAudio) {
   return id;
 }
 
+export function playOnCall(input: {
+  ownerId: string;
+  threadId: string;
+  turnId: string;
+  streamId: string;
+  sequence: number;
+  audio: GeneratedAudio;
+}) {
+  if (!inCall(input.threadId)) return;
+  callAudio({
+    ownerId: input.ownerId,
+    threadId: input.threadId,
+    turnId: input.turnId,
+    streamId: input.streamId,
+    id: keepClip(input.ownerId, input.audio),
+    sequence: input.sequence,
+  });
+}
+
 export function callSpeaker(input: {
   ownerId: string;
   threadId: string;
@@ -56,26 +75,21 @@ export function callSpeaker(input: {
   failed(error: unknown): void;
 }) {
   const pending = new Map<string, string>();
-  const spoken = new Set<string>();
+  const voiced = new Set<string>();
   let sequence = 0;
   let order = Promise.resolve();
-  const speak = (text: string) => {
+  const speak = (text: string, streamId: string) => {
     const clean = speakable(text).slice(0, 4096);
     if (!clean || input.signal.aborted) return;
+    voiced.add(streamId);
     const index = sequence++;
     const audio = input.synthesize(clean);
     audio.catch(() => {});
     order = order.then(async () => {
       try {
         const result = await audio;
-        if (input.signal.aborted || !inCall(input.threadId)) return;
-        callAudio({
-          ownerId: input.ownerId,
-          threadId: input.threadId,
-          turnId: input.turnId,
-          id: keepClip(input.ownerId, result),
-          sequence: index,
-        });
+        if (input.signal.aborted) return;
+        playOnCall({ ...input, streamId, sequence: index, audio: result });
       } catch (error) {
         if (!input.signal.aborted) input.failed(error);
       }
@@ -86,8 +100,7 @@ export function callSpeaker(input: {
       const buffered = (pending.get(streamId) ?? '') + text;
       if (done) {
         pending.delete(streamId);
-        speak(buffered);
-        spoken.add(streamId);
+        speak(buffered, streamId);
         return;
       }
       const boundary = Math.max(
@@ -97,12 +110,14 @@ export function callSpeaker(input: {
         ),
       );
       if (boundary > 0 && (sequence === 0 || boundary >= 80)) {
-        speak(buffered.slice(0, boundary));
+        speak(buffered.slice(0, boundary), streamId);
         pending.set(streamId, buffered.slice(boundary));
       } else pending.set(streamId, buffered);
     },
-    spoke(streamId?: string) {
-      return Boolean(streamId && spoken.has(streamId));
+    finish(streamId?: string) {
+      for (const [id, text] of pending) speak(text, id);
+      pending.clear();
+      return Boolean(streamId && voiced.has(streamId));
     },
     finished() {
       return order;

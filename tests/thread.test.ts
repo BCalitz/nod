@@ -673,7 +673,6 @@ test(
           context.delta('Sure, checking now.', stream);
           context.delta(' Your next meeting is at ten with the design team', stream);
           context.delta(' and it runs for an hour.', stream);
-          context.delta('', stream, true);
           await context.reply(
             'Sure, checking now. Your next meeting is at ten with the design team and it runs for an hour.',
             stream,
@@ -1854,6 +1853,23 @@ test(
             text: '  Context for [the] _recording_  ',
             displayText: '  Context for \\[the\\] \\_recording\\_  ',
           };
+          const called = await sendAudio({
+            threadId,
+            clientMessageId: randomUUID(),
+            text: '',
+            call: true,
+          });
+          assert.equal(called.statusCode, 200, called.body);
+          const callReceipt = called.json<SubmitMessageResponse>();
+          assert.equal(callReceipt.audioCaption, undefined);
+          const callStored = (
+            await db.pool.query('SELECT text,audio_caption,attachments FROM messages WHERE id=$1', [
+              callReceipt.messageId,
+            ])
+          ).rows[0];
+          assert.equal(callStored.text, 'Synthetic spoken request');
+          assert.equal(callStored.audio_caption, null);
+          assert.deepEqual(callStored.attachments, []);
           const before = transcriptions.length;
           const accepted = await sendAudio(message);
           assert.equal(accepted.statusCode, 200, accepted.body);
@@ -4266,6 +4282,12 @@ test(
           ).rows;
         const callId = randomUUID();
         const otherCall = randomUUID();
+        const clips: Array<{ turnId: string; streamId: string; sequence: number }> = [];
+        const listen = (event: ServerEvent) => {
+          if (event.type === 'call_audio') clips.push(event);
+        };
+        const clipsFor = (turnId: string) => clips.filter((clip) => clip.turnId === turnId);
+        events.on('event', listen);
         try {
           audioReplyMode = 'never';
           setCall(threadId, callId, true);
@@ -4280,7 +4302,8 @@ test(
             call: true,
           });
           assert.equal(spoken.length, before + 1);
-          assert.equal((await audioMessages(called.turnId)).length, 1);
+          assert.equal(clipsFor(called.turnId).length, 1);
+          assert.equal((await audioMessages(called.turnId)).length, 0);
           await thread.resumeTurn(
             called.turnId,
             `synthetic-call-resume:${called.turnId}`,
@@ -4293,30 +4316,21 @@ test(
           ).rows[0]!.id;
           await waitFor(settled(resumed));
           assert.equal(spoken.length, before + 2);
-          assert.equal((await audioMessages(resumed)).length, 1);
-          const clips: Array<{ turnId: string; sequence: number }> = [];
-          const listen = (event: ServerEvent) => {
-            if (event.type === 'call_audio') clips.push(event);
-          };
-          events.on('event', listen);
-          try {
-            const streamed = await thread.submitUserMessage('Synthetic streamed call reply.');
-            await waitFor(settled(streamed.turnId));
-            assert.deepEqual(spoken.slice(before + 2).sort(), [
-              'Sure, checking now.',
-              'Your next meeting is at ten with the design team and it runs for an hour.',
-            ]);
-            assert.deepEqual(
-              clips.map(({ turnId, sequence }) => ({ turnId, sequence })),
-              [
-                { turnId: streamed.turnId, sequence: 0 },
-                { turnId: streamed.turnId, sequence: 1 },
-              ],
-            );
-            assert.equal((await audioMessages(streamed.turnId)).length, 0);
-          } finally {
-            events.off('event', listen);
-          }
+          assert.equal(clipsFor(resumed).length, 1);
+          assert.equal((await audioMessages(resumed)).length, 0);
+          const streamed = await thread.submitUserMessage('Synthetic streamed call reply.');
+          await waitFor(settled(streamed.turnId));
+          assert.deepEqual(spoken.slice(before + 2).sort(), [
+            'Sure, checking now.',
+            'Your next meeting is at ten with the design team and it runs for an hour.',
+          ]);
+          const streamedClips = clipsFor(streamed.turnId);
+          assert.deepEqual(
+            streamedClips.map(({ sequence }) => sequence),
+            [0, 1],
+          );
+          assert.equal(new Set(streamedClips.map(({ streamId }) => streamId)).size, 1);
+          assert.equal((await audioMessages(streamed.turnId)).length, 0);
           setCall(threadId, callId, false);
           const after = await thread.submitUserMessage('Synthetic question after the call.');
           await waitFor(settled(after.turnId));
@@ -4325,8 +4339,10 @@ test(
             available: true,
           });
           assert.equal(spoken.length, before + 4);
+          assert.equal(clipsFor(after.turnId).length, 0);
           assert.equal((await audioMessages(after.turnId)).length, 0);
         } finally {
+          events.off('event', listen);
           setCall(threadId, callId, false);
           audioReplyMode = 'never';
         }

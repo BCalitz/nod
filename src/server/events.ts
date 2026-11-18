@@ -16,6 +16,7 @@ type CallAudioEvent = {
   ownerId: string;
   threadId: string;
   turnId: string;
+  streamId: string;
   id: string;
   sequence: number;
 };

@@ -624,6 +624,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
                     type: 'call_audio',
                     threadId: event.threadId,
                     turnId: event.turnId,
+                    streamId: event.streamId,
                     id: event.id,
                     sequence: event.sequence,
                   }

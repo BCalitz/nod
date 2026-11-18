@@ -115,8 +115,8 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
         }
       }
       if (!recording) throw invalid('Choose an audio recording.');
-      const input = messageInput
-        .extend({ clientMessageId: z.uuid(), threadId: z.uuid() })
+      const { call = false, ...input } = messageInput
+        .extend({ clientMessageId: z.uuid(), threadId: z.uuid(), call: z.boolean().optional() })
         .refine((value) => !value.approvalAnswer)
         .refine(
           (value) =>
@@ -206,7 +206,8 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
       );
       signal.throwIfAborted();
       const text = [input.text, transcript].filter(Boolean).join('\n\n');
-      const displayText = input.displayText;
+      const displayText = call ? undefined : input.displayText;
+      const audioCaption = call ? undefined : input.text;
       if (text.length > messageTextLimit)
         throw Object.assign(invalid(messageTooLongError), { code: 'message_too_long' });
       const codeLike =
@@ -254,11 +255,12 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
         {
           ...input,
           displayText,
-          audioCaption: input.text,
+          audioCaption,
           channel: 'web',
           stopSignal: arrival,
           prepareAttachments: async (client, threadId) => {
             signal.throwIfAborted();
+            if (call) return [];
             const clip = await artifacts.storeArtifact(
               recording.bytes,
               recording.name,
@@ -275,12 +277,12 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
               ...result,
               messageText: text,
               displayText,
-              audioCaption: input.text,
+              audioCaption,
             }),
         },
       );
       refresh();
-      return { ...submitted, messageText: text, displayText, audioCaption: input.text };
+      return { ...submitted, messageText: text, displayText, audioCaption };
     } catch (error) {
       if (!submitting && !signal.aborted && error instanceof Error && !('retryable' in error))
         Object.assign(error, { retryable: true });

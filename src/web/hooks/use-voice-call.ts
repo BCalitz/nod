@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Message } from '../../shared/contracts';
 import { api } from '../lib/api';
 import { captureAnalytics } from '../lib/analytics';
 
@@ -8,9 +7,11 @@ export type CallPhase =
 
 const frameSize = 1024;
 const startFrames = 3;
+const startWindow = 5;
 const interruptFrames = 5;
+const interruptWindow = 8;
 const preRollFrames = 6;
-const silenceMs = 800;
+const silenceMs = 1100;
 const shortestMs = 350;
 const longestMs = 60_000;
 const heartbeatMs = 8_000;
@@ -72,23 +73,19 @@ function durationBucket(ms: number) {
   return ms < 60_000 ? 'under_1m' : ms < 300_000 ? '1_5m' : '5m_plus';
 }
 
-function audioReply(message: Message) {
-  return message.role === 'assistant'
-    ? message.attachments.find((file) => file.mimeType.startsWith('audio/'))
-    : undefined;
-}
+type Clip = { url: string; streamId: string };
 
 export function useVoiceCall({
   threadId,
   active,
   working,
-  messages,
+  streams,
   send,
 }: {
   threadId: string;
   active: boolean;
   working: boolean;
-  messages: Message[];
+  streams: string[];
   send(recording: File): Promise<boolean>;
 }) {
   const [phase, setPhase] = useState<CallPhase>('starting');
@@ -101,11 +98,14 @@ export function useVoiceCall({
   workingRef.current = working;
   const sendRef = useRef(send);
   sendRef.current = send;
-  const queue = useRef<Array<{ url: string; turnId: string | null }>>([]);
+  const streamsRef = useRef(streams);
+  streamsRef.current = streams;
+  const queue = useRef<Clip[]>([]);
+  const held = useRef<Clip[]>([]);
+  const heard = useRef<string[]>([]);
+  const holds = useRef(0);
   const silenced = useRef(new Set<string>());
   const playing = useRef<string | null>(null);
-  const played = useRef<Set<string> | null>(null);
-  const since = useRef('');
   const player = useRef<HTMLAudioElement | null>(null);
   const speaking = useRef(false);
   const sending = useRef(0);
@@ -128,8 +128,8 @@ export function useVoiceCall({
   };
 
   const stopSpeaking = () => {
-    for (const turnId of [playing.current, ...queue.current.map((item) => item.turnId)])
-      if (turnId) silenced.current.add(turnId);
+    for (const streamId of [playing.current, ...queue.current.map((item) => item.streamId)])
+      if (streamId) silenced.current.add(streamId);
     queue.current = [];
     playing.current = null;
     const current = player.current;
@@ -145,13 +145,13 @@ export function useVoiceCall({
   };
 
   const playNext = () => {
-    if (speaking.current) return;
+    if (speaking.current || holds.current) return;
     const next = queue.current.shift();
     if (!next) {
       idle();
       return;
     }
-    playing.current = next.turnId;
+    playing.current = next.streamId;
     const audio = new Audio(next.url);
     player.current = audio;
     speaking.current = true;
@@ -168,26 +168,37 @@ export function useVoiceCall({
     void audio.play().catch(done);
   };
 
-  useEffect(() => {
-    if (!active) return;
-    if (!played.current) {
-      played.current = new Set(messages.map((message) => message.id));
-      since.current = messages.reduce(
-        (latest, message) => (message.createdAt > latest ? message.createdAt : latest),
-        '',
-      );
+  const hold = () => {
+    holds.current++;
+    player.current?.pause();
+    heard.current = [
+      ...new Set([
+        ...heard.current,
+        ...streamsRef.current,
+        ...(playing.current ? [playing.current] : []),
+        ...queue.current.map((item) => item.streamId),
+      ]),
+    ];
+  };
+
+  const release = (spoke: boolean) => {
+    holds.current = Math.max(0, holds.current - 1);
+    if (holds.current) return;
+    const waiting = held.current;
+    held.current = [];
+    if (spoke) {
+      for (const streamId of heard.current) silenced.current.add(streamId);
+      for (const item of waiting) silenced.current.add(item.streamId);
+      heard.current = [];
+      stopSpeaking();
+      playNext();
       return;
     }
-    for (const message of messages) {
-      if (played.current.has(message.id) || message.createdAt < since.current) continue;
-      const audio = audioReply(message);
-      if (!audio) continue;
-      played.current.add(message.id);
-      if (message.turnId && silenced.current.has(message.turnId)) continue;
-      queue.current.push({ url: audio.url, turnId: message.turnId });
-    }
-    playNext();
-  }, [active, messages]);
+    heard.current = [];
+    queue.current.push(...waiting);
+    if (player.current) void player.current.play().catch(() => {});
+    else playNext();
+  };
 
   useEffect(() => {
     if (active) idle();
@@ -196,10 +207,14 @@ export function useVoiceCall({
   useEffect(() => {
     if (!active) return;
     const clip = (event: Event) => {
-      const { id, turnId } = (event as CustomEvent<{ id: string; turnId: string }>).detail;
-      if (silenced.current.has(turnId)) return;
-      queue.current.push({ url: `/api/call/audio/${encodeURIComponent(id)}`, turnId });
-      playNext();
+      const { id, streamId } = (event as CustomEvent<{ id: string; streamId: string }>).detail;
+      if (silenced.current.has(streamId)) return;
+      const item = { url: `/api/call/audio/${encodeURIComponent(id)}`, streamId };
+      if (holds.current) held.current.push(item);
+      else {
+        queue.current.push(item);
+        playNext();
+      }
     };
     window.addEventListener('nod:call-audio', clip);
     return () => window.removeEventListener('nod:call-audio', clip);
@@ -254,7 +269,7 @@ export function useVoiceCall({
         processor.connect(silent);
         silent.connect(context.destination);
         let noise = 0.01;
-        let loud = 0;
+        let history: boolean[] = [];
         let quietMs = 0;
         let spokenMs = 0;
         let capturing = false;
@@ -270,6 +285,7 @@ export function useVoiceCall({
           quietMs = 0;
           if (phaseRef.current === 'hearing') phaseRef.current = 'listening';
           if (duration < shortestMs) {
+            release(false);
             idle();
             return;
           }
@@ -283,6 +299,7 @@ export function useVoiceCall({
             .catch(() => {})
             .finally(() => {
               sending.current--;
+              release(true);
               idle();
             });
         };
@@ -298,26 +315,31 @@ export function useVoiceCall({
           }
           if (mutedRef.current) {
             if (capturing) finish();
-            loud = 0;
+            history = [];
             return;
           }
-          const threshold = speaking.current
-            ? Math.max(0.05, noise * 6)
-            : Math.max(0.015, noise * 3);
+          const threshold =
+            speaking.current && !holds.current
+              ? Math.max(0.03, noise * 4)
+              : Math.max(0.015, noise * 3);
           const voiced = rms > threshold;
           if (!capturing) {
             if (!voiced) noise = noise * 0.95 + Math.min(rms, 0.05) * 0.05;
             recent.push(samples);
             if (recent.length > preRollFrames) recent.shift();
-            loud = voiced ? loud + 1 : 0;
-            if (loud < (speaking.current ? interruptFrames : startFrames)) return;
-            if (speaking.current) stopSpeaking();
+            history = [...history, voiced].slice(-interruptWindow);
+            const interrupting = speaking.current && !holds.current;
+            const loud = history
+              .slice(-(interrupting ? interruptWindow : startWindow))
+              .filter(Boolean).length;
+            if (loud < (interrupting ? interruptFrames : startFrames)) return;
+            hold();
             capturing = true;
             chunks = [...recent];
             recent.length = 0;
             spokenMs = loud * frameMs;
             quietMs = 0;
-            loud = 0;
+            history = [];
             show('hearing');
             return;
           }
@@ -354,7 +376,9 @@ export function useVoiceCall({
       if (processor) processor.onaudioprocess = null;
       for (const track of stream?.getTracks() ?? []) track.stop();
       void context?.close().catch(() => {});
-      played.current = null;
+      holds.current = 0;
+      held.current = [];
+      heard.current = [];
     };
   }, [active, threadId]);
 

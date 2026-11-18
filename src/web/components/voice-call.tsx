@@ -1,5 +1,4 @@
 import type { CSSProperties } from 'react';
-import type { Message } from '../../shared/contracts';
 import { useVoiceCall, type CallPhase } from '../hooks/use-voice-call';
 import { Mic, MicOff, PhoneOff, Square } from './icons';
 import { Button, Notice } from './ui';
@@ -17,17 +16,17 @@ const labels: Record<CallPhase, string> = {
 export function VoiceCall({
   threadId,
   working,
-  messages,
+  streams,
   send,
   onEnd,
 }: {
   threadId: string;
   working: boolean;
-  messages: Message[];
+  streams: string[];
   send(recording: File): Promise<boolean>;
   onEnd(): void;
 }) {
-  const call = useVoiceCall({ threadId, active: true, working, messages, send });
+  const call = useVoiceCall({ threadId, active: true, working, streams, send });
   const label = call.muted && call.phase !== 'failed' ? 'Muted' : labels[call.phase];
   return (
     <section className="voice-call" aria-label="Voice call">

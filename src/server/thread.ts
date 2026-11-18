@@ -33,7 +33,7 @@ import {
 } from './turn-chain.ts';
 import { dataRoot, databaseUrl, ownerId } from './config.ts';
 import { delta, refresh, working } from './events.ts';
-import { callSpeaker, inCall, speakable } from './calls.ts';
+import { callSpeaker, inCall, playOnCall, speakable } from './calls.ts';
 import {
   artifactView,
   localArtifacts,
@@ -2232,10 +2232,11 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
         ? result.message
         : undefined);
     let questionAudio: GeneratedAudio | undefined;
+    const streamedReply = speaker?.finish(finalReply?.streamId) ?? false;
     const spokenSource =
       questionText && answerChoices
         ? questionWithChoices(questionText, answerChoices)
-        : (spokenQuestion ?? (speaker?.spoke(finalReply?.streamId) ? undefined : finalReply?.text));
+        : (spokenQuestion ?? (streamedReply ? undefined : finalReply?.text));
     const speechText = spokenSource === undefined ? undefined : speakable(spokenSource);
     if (
       (result.status === 'succeeded' || spokenQuestion) &&
@@ -2249,7 +2250,17 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
         const mode = await dependencies.audioReplies?.();
         if (mode === 'always' || (mode === 'voice' && voice) || calling()) {
           const audio = await fenced(() => dependencies.speech.synthesize(speechText, signal))();
-          if (spokenQuestion) questionAudio = audio;
+          if (calling()) {
+            await speaker?.finished();
+            playOnCall({
+              ownerId,
+              threadId,
+              turnId,
+              streamId: finalReply?.streamId ?? turnId,
+              sequence: Number.MAX_SAFE_INTEGER,
+              audio,
+            });
+          } else if (spokenQuestion) questionAudio = audio;
           else if (finalReply) {
             await current(async (client) => {
               const artifact = await artifacts.storeArtifact(

@@ -1297,7 +1297,7 @@ export function Chat({
     const id = previousAttempt?.id ?? crypto.randomUUID();
     const submittedRecording = previousAttempt?.recording ?? recording;
     let audio: ImagePreview | undefined;
-    if (submittedRecording && !privateVerification) {
+    if (submittedRecording && !privateVerification && source !== 'voice_call') {
       const previousUrl = audioPreviews.current.get(id);
       if (previousUrl) URL.revokeObjectURL(previousUrl);
       const url = URL.createObjectURL(submittedRecording);
@@ -1438,6 +1438,7 @@ export function Chat({
           ...(verificationRequestId ? { verificationRequestId } : {}),
           ...(questionAnswer ? { questionAnswer } : {}),
           ...(approvalAnswer ? { approvalAnswer } : {}),
+          ...(source === 'voice_call' ? { call: true } : {}),
         });
       submittedBody = messageBody;
       let body: string | FormData = messageBody;
@@ -2528,10 +2529,10 @@ export function Chat({
           >
             {calling && (
               <VoiceCall
-                key={`${ownerId}.${threadId}`}
+                key={`call.${ownerId}.${threadId}`}
                 threadId={threadId}
                 working={working}
-                messages={persistedMessages}
+                streams={Object.keys(streams)}
                 send={async (recording) => (await send('', [], null, 'voice_call', recording)).sent}
                 onEnd={() => setCalling(false)}
               />

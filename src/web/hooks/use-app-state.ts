@@ -138,11 +138,13 @@ export function useAppState(accountId?: string) {
           if (
             data.type === 'call_audio' &&
             typeof data.id === 'string' &&
-            typeof data.turnId === 'string' &&
+            typeof data.streamId === 'string' &&
             data.threadId === threadId.current
           )
             window.dispatchEvent(
-              new CustomEvent('nod:call-audio', { detail: { id: data.id, turnId: data.turnId } }),
+              new CustomEvent('nod:call-audio', {
+                detail: { id: data.id, streamId: data.streamId },
+              }),
             );
           if (data.type === 'activity' && Array.isArray(data.items)) {
             const activity = data.items;

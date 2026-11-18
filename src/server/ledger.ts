@@ -32,6 +32,7 @@ import { afterCommit, transaction } from './transaction.ts';
 import { analyticsModel, snapshotAnalytics, type CaptureAnalytics } from './analytics.ts';
 import { captureSettingChanges, type SettingActor } from './analytics-settings.ts';
 
+const callOperations = ['call', 'call_search', 'call_answer'];
 export const spendingLimitReached = 'This month’s spending limit is reached.';
 export const spendingLimitText = (monthlyUsd: number) =>
   `This month’s $${Number.isInteger(monthlyUsd) ? monthlyUsd : monthlyUsd.toFixed(2)} spending limit is reached.`;
@@ -712,6 +713,18 @@ export function createLedger({
             },
           } satisfies Pick<SpeechProvider, 'transcribe'>)
         : {}),
+      ...(base.call
+        ? ({
+            async call(input, signal, onUsage) {
+              if (await limitReached()) throw new Error(spendingLimitReached);
+              return base.call!(input, signal, (usage) => {
+                report(usage);
+                onUsage?.(usage);
+                void flushUsage().catch(() => {});
+              });
+            },
+          } satisfies Pick<SpeechProvider, 'call'>)
+        : {}),
       ...(base.listen
         ? ({
             async listen(onUsage) {
@@ -1190,7 +1203,7 @@ export function createLedger({
     const spent = days.reduce((sum, value) => sum + value, 0);
     const outside = new Map<TrustOutside['kind'], number>();
     for (const { outside: turnless, category, operation, cost } of background.rows)
-      if (turnless) {
+      if (turnless && !callOperations.includes(operation ?? '')) {
         const kind: TrustOutside['kind'] =
           category === 'review' && operation === 'access'
             ? 'email'
@@ -1220,7 +1233,12 @@ export function createLedger({
         daily: days,
         unpriced: row.unpriced,
         planUsage: row.plan_usage,
-        backgroundUsd: background.rows.reduce((sum, item) => sum + item.cost, 0),
+        backgroundUsd: background.rows
+          .filter((item) => !(item.outside && callOperations.includes(item.operation ?? '')))
+          .reduce((sum, item) => sum + item.cost, 0),
+        callsUsd: background.rows
+          .filter((item) => item.outside && callOperations.includes(item.operation ?? ''))
+          .reduce((sum, item) => sum + item.cost, 0),
         outside: [...outside].map(([kind, costUsd]) => ({ kind, costUsd })),
       },
       ...current,

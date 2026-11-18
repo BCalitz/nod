@@ -116,6 +116,57 @@ function liveListener(threadId: string, rate: number) {
   };
 }
 
+async function startLive(threadId: string, stream: MediaStream) {
+  const connection = new RTCPeerConnection();
+  const speaker = new Audio();
+  speaker.autoplay = true;
+  const remote = new Promise<MediaStream>((resolve) => {
+    connection.ontrack = (event) => {
+      const [incoming] = event.streams;
+      speaker.srcObject = incoming;
+      resolve(incoming);
+    };
+  });
+  const close = () => {
+    connection.close();
+    speaker.pause();
+    speaker.srcObject = null;
+    void api('/api/call/live', {
+      method: 'DELETE',
+      body: JSON.stringify({ threadId }),
+      keepalive: true,
+    }).catch(() => {});
+  };
+  try {
+    for (const track of stream.getAudioTracks()) connection.addTrack(track, stream);
+    connection.createDataChannel('oai-events');
+    const offer = await connection.createOffer();
+    await connection.setLocalDescription(offer);
+    const { sdp } = await api<{ sdp: string }>('/api/call/live', {
+      method: 'POST',
+      body: JSON.stringify({ threadId, sdp: offer.sdp }),
+    });
+    await connection.setRemoteDescription({ type: 'answer', sdp });
+    return { remote, close };
+  } catch (error) {
+    connection.close();
+    throw error;
+  }
+}
+
+function meter(context: AudioContext, stream: MediaStream) {
+  const analyser = context.createAnalyser();
+  analyser.fftSize = 1024;
+  context.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  return () => {
+    analyser.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (const sample of samples) sum += sample * sample;
+    return Math.sqrt(sum / samples.length);
+  };
+}
+
 function savedMicrophone() {
   try {
     return localStorage.getItem('nod.microphone') ?? '';
@@ -338,6 +389,8 @@ export function useVoiceCall({
     let started = 0;
     let sent = 0;
     let listener: ReturnType<typeof liveListener> | undefined;
+    let endLive: (() => void) | undefined;
+    let meterTimer: number | undefined;
     (async () => {
       try {
         const deviceId = savedMicrophone();
@@ -350,6 +403,38 @@ export function useVoiceCall({
           },
         });
         if (closed) return;
+        const live = await startLive(threadId, stream).catch((cause: unknown) => {
+          console.warn('Live call unavailable; using the standard call.', cause);
+          return undefined;
+        });
+        if (live) {
+          endLive = live.close;
+          if (closed) return live.close();
+          context = new AudioContext();
+          await context.resume();
+          const own = meter(context, stream);
+          const remote = await live.remote;
+          if (closed || !context) return;
+          const theirs = meter(context, remote);
+          let quietSince = 0;
+          meterTimer = window.setInterval(() => {
+            setLevel(Math.min(1, own() * 12));
+            for (const track of stream?.getAudioTracks() ?? []) track.enabled = !mutedRef.current;
+            const now = performance.now();
+            if (theirs() > 0.01) {
+              quietSince = 0;
+              speaking.current = true;
+            } else if (speaking.current) {
+              quietSince ||= now;
+              if (now - quietSince > 400) speaking.current = false;
+            }
+            idle();
+          }, 100);
+          started = Date.now();
+          captureAnalytics('voice_call_started');
+          idle();
+          return;
+        }
         let source: MediaStreamAudioSourceNode;
         try {
           context = new AudioContext({ sampleRate: liveRate });
@@ -485,6 +570,8 @@ export function useVoiceCall({
       void beat(false);
       stopSpeaking();
       listener?.cancel();
+      endLive?.();
+      window.clearInterval(meterTimer);
       if (processor) processor.onaudioprocess = null;
       for (const track of stream?.getTracks() ?? []) track.stop();
       void context?.close().catch(() => {});

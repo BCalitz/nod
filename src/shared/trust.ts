@@ -87,6 +87,7 @@ export interface TrustView extends TrustPage {
     unpriced: boolean;
     planUsage: boolean;
     backgroundUsd: number;
+    callsUsd: number;
     outside: TrustOutside[];
   };
   limit: { monthlyUsd: number; reached: boolean } | null;

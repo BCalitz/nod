@@ -15,6 +15,30 @@ export interface LiveTranscription {
   close(): void;
 }
 
+export type LiveCallEvent =
+  | { type: 'heard' | 'said'; text: string; startMs: number; endMs: number }
+  | { type: 'delegated'; id: string }
+  | { type: 'failed'; message: string }
+  | { type: 'closed'; reason: string };
+
+export interface LiveCallOptions {
+  sdp: string;
+  instructions: string;
+  backendInstructions: string;
+  handoff: string;
+  history: Array<{ role: 'user' | 'assistant'; text: string }>;
+  voice?: string;
+  onEvent(event: LiveCallEvent): void;
+}
+
+export interface LiveCall {
+  answer: string;
+  say(text: string, delegationId: string | null): void;
+  note(text: string, delegationId: string | null): void;
+  complete(callId: string, output: string): void;
+  close(): void;
+}
+
 export interface GeneratedAudio {
   bytes: Buffer;
   mimeType: string;
@@ -34,6 +58,11 @@ export interface SpeechProvider {
     options?: SpeechSynthesisOptions,
   ): Promise<GeneratedAudio>;
   listen?(report?: (usage: ProviderUsageEvent) => void): Promise<LiveTranscription | undefined>;
+  call?(
+    options: LiveCallOptions,
+    signal?: AbortSignal,
+    report?: (usage: ProviderUsageEvent) => void,
+  ): Promise<LiveCall>;
   transcribe?(
     audio: {
       bytes: Uint8Array;

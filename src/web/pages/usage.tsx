@@ -201,6 +201,7 @@ function Month({ view }: { view: TrustView }) {
     month.unpriced && 'Some usage has no price in Nod, such as a local or free model.',
     month.backgroundUsd > 0 &&
       `${money(month.backgroundUsd)} was background work: source checks, schedules and tasks Nod started.`,
+    month.callsUsd > 0 && `Live voice calls cost ${money(month.callsUsd)}.`,
     month.outside.length > 0 &&
       `Of that, ${month.outside.map((item) => `${outsideNames[item.kind]} ${money(item.costUsd)}`).join(', ')} ran outside a check or task.`,
   ].filter((note): note is string => Boolean(note));

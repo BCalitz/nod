@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   SpeechProviderError,
   type GeneratedAudio,
+  type LiveCallOptions,
   type SpeechProvider,
   type SpeechSynthesisOptions,
 } from '../ports/speech.ts';
@@ -106,6 +107,14 @@ export function createSpeech(provider: SpeechProvider) {
     async refreshVoices(signal?: AbortSignal, force = false) {
       signal?.throwIfAborted();
       await cancellable(provider.refreshVoices?.(signal, force) ?? Promise.resolve(), signal);
+    },
+    async call(
+      options: LiveCallOptions,
+      signal?: AbortSignal,
+      report?: (usage: ProviderUsageEvent) => void,
+    ) {
+      if (!provider.call) throw new Error('Live calls are not available.');
+      return provider.call(options, signal, report);
     },
     async listen(report?: (usage: ProviderUsageEvent) => void) {
       if (!(provider.transcriptionConfigured ?? provider.configured)) return;

@@ -33,7 +33,7 @@ import {
 } from './turn-chain.ts';
 import { dataRoot, databaseUrl, ownerId } from './config.ts';
 import { delta, refresh, working } from './events.ts';
-import { callSpeaker, inCall, playOnCall, speakable } from './calls.ts';
+import { awaitOnCall, callSpeaker, inCall, liveSpeaker, playOnCall, speakable } from './calls.ts';
 import {
   artifactView,
   localArtifacts,
@@ -1957,8 +1957,11 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       available: Boolean(dependencies.speech.configured),
       ...(call ? { call: true as const } : {}),
     };
+    const answering = call && ['user', 'resume'].includes(turn.source);
+    const live = answering ? liveSpeaker(threadId, signal) : undefined;
     const speaker =
-      call && ['user', 'resume'].includes(turn.source)
+      live ??
+      (answering
         ? callSpeaker({
             ownerId,
             threadId,
@@ -1969,7 +1972,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
             ),
             failed: (error) => logFailure('call_speech_failed', error, { threadId, turnId }),
           })
-        : undefined;
+        : undefined);
     let scheduleCache: RuntimeContext['scheduleCache'];
     if (turn.source === 'schedule')
       try {
@@ -2250,7 +2253,8 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
     ) {
       try {
         const mode = await dependencies.audioReplies?.();
-        if (mode === 'always' || (mode === 'voice' && voice) || calling()) {
+        if (live && calling()) live.say(speechText);
+        else if (mode === 'always' || (mode === 'voice' && voice) || calling()) {
           const audio = await fenced(() => dependencies.speech.synthesize(speechText, signal))();
           if (calling()) {
             await speaker?.finished();
@@ -2293,6 +2297,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       }
     }
     await speaker?.finished();
+    if (live && result.status === 'waiting_user') awaitOnCall(threadId);
     await current(async (client) => {
       if (result.status === 'succeeded') return finishTurn(client, turnId, 'succeeded');
       const waiting = await finishTurn(client, turnId, 'waiting', {

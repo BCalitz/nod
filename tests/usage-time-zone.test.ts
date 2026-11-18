@@ -89,6 +89,7 @@ test('Usage uses the computer time zone for activity and opened logs', async (t)
       unpriced: false,
       planUsage: false,
       backgroundUsd: 0,
+      callsUsd: 0,
       outside: [],
     },
     limit: null,

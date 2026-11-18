@@ -574,6 +574,16 @@ export function createDefaultAdapters(
                       : localSpeech;
         return selected.synthesize(text, signal, report, options);
       },
+      call: async (input, signal, report) => {
+        const voice = (await voicePreferences.get()).speechVoice;
+        if (!openAISpeech.configured)
+          throw new Error('Live calls need an OpenAI connection in Settings → Models.');
+        return openAISpeech.call!(
+          { ...input, voice: voice?.startsWith('openai:') ? voice : undefined },
+          signal,
+          report,
+        );
+      },
       listen: async (report) => {
         const voice = (await voicePreferences.get()).speechVoice;
         if (

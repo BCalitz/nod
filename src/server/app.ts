@@ -317,7 +317,41 @@ export async function createApp(dependencies: AppDependencies = {}) {
   });
   await app.register(multipart, { limits: { fileSize: fileBytes, files: 1, fields: 5 } });
   const audioMessages = registerAudioMessages(app, dependencies);
-  registerCalls(app, ownerId, dependencies.speech);
+  registerCalls(app, ownerId, dependencies.speech, {
+    history: async (threadId) =>
+      (
+        await pool.query<{ role: 'user' | 'assistant'; text: string }>(
+          `SELECT m.role,m.text FROM messages m LEFT JOIN turns u ON u.id=m.turn_id AND u.owner_id=m.owner_id
+           WHERE m.owner_id=$1 AND m.thread_id=$2 AND m.role IN ('user','assistant') AND m.text<>''
+             AND NOT COALESCE(u.withdrawn,false)
+           ORDER BY m.created_at DESC,m.id DESC LIMIT 12`,
+          [ownerId, threadId],
+        )
+      ).rows
+        .reverse()
+        .map((row) => ({ role: row.role, text: row.text.slice(0, 1_000) })),
+    submit: async (text, threadId) => {
+      const clientMessageId = randomUUID();
+      const verification = await dependencies.verification?.accept(text, {
+        attachmentIds: [],
+        threadId,
+        clientMessageId,
+        channel: 'web',
+      });
+      if (verification) return verification;
+      if (!publicConfiguration().llmReady)
+        throw Object.assign(
+          new Error('Configure an agent provider before starting a conversation.'),
+          { statusCode: 503 },
+        );
+      return (dependencies.submitMessage ?? submitUserMessage)(text, [], {
+        channel: 'web',
+        threadId,
+        clientMessageId,
+        stopSignal: stopSignal(),
+      });
+    },
+  });
   app.get('/api/health', async () => {
     await pool.query('SELECT 1');
     return { ok: true };

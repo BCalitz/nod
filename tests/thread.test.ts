@@ -17,6 +17,7 @@ import Fastify from 'fastify';
 import pg from 'pg';
 import { z } from 'zod';
 import type { FeedbackEnvelope } from '../src/ports/feedback.ts';
+import type { LiveCallEvent } from '../src/ports/speech.ts';
 import { createN8nFeedback } from '../src/providers/n8n/feedback.ts';
 import { registerFeedback } from '../src/server/feedback.ts';
 import { setCall } from '../src/server/calls.ts';
@@ -274,6 +275,10 @@ test(
     let transcriptionGate: Promise<void> | undefined;
     const liveAudio: Buffer[] = [];
     let liveFailure: Error | undefined;
+    const liveSaid: string[] = [];
+    const liveCompleted: Array<[string, string]> = [];
+    let liveEvent: ((event: LiveCallEvent) => void) | undefined;
+    let liveClosed = 0;
     let synthesisGate: Promise<void> | undefined;
     let synthesisError: Error | undefined;
     let audioReplyMode: 'auto' | 'voice' | 'always' | 'never' = 'never';
@@ -283,6 +288,16 @@ test(
       id: 'fixture',
       get configured() {
         return speechReady;
+      },
+      async call(options) {
+        liveEvent = options.onEvent;
+        return {
+          answer: 'Synthetic connection answer',
+          say: (text) => void liveSaid.push(text),
+          note() {},
+          complete: (id, output) => void liveCompleted.push([id, output]),
+          close: () => void liveClosed++,
+        };
       },
       async listen() {
         return {
@@ -4416,6 +4431,53 @@ test(
           audioReplyMode = 'never';
         }
       });
+
+      await t.test(
+        'a live call hands Nod only the owner’s own words and speaks its reply',
+        async () => {
+          const callId = randomUUID();
+          const before = spoken.length;
+          const heard = (text: string) => liveEvent!({ type: 'heard', text, startMs: 0, endMs: 0 });
+          try {
+            assert.equal(
+              (await request('POST', '/api/call/live', { threadId, sdp: 'synthetic offer' }))
+                .statusCode,
+              409,
+            );
+            setCall(threadId, callId, true);
+            const started = await request('POST', '/api/call/live', {
+              threadId,
+              sdp: 'synthetic offer',
+            });
+            assert.equal(started.statusCode, 200);
+            assert.equal(started.json().sdp, 'Synthetic connection answer');
+            heard(' Synthetic small talk.');
+            liveEvent!({ type: 'said', text: ' Synthetic model words.', startMs: 0, endMs: 0 });
+            heard(' Synthetic streamed');
+            heard(' call reply.');
+            liveEvent!({ type: 'delegated', id: 'synthetic-call' });
+            await waitFor(() => liveCompleted.length === 1);
+            assert.deepEqual(liveCompleted, [['synthetic-call', 'Nod is working on it.']]);
+            const message = (
+              await db.pool.query<{ turn_id: string; text: string }>(
+                "SELECT turn_id,text FROM messages WHERE thread_id=$1 AND role='user' ORDER BY created_at DESC,id DESC LIMIT 1",
+                [threadId],
+              )
+            ).rows[0]!;
+            assert.equal(message.text, 'Synthetic streamed call reply.');
+            await waitFor(settled(message.turn_id));
+            assert.deepEqual(liveSaid, [
+              'Sure, checking now.',
+              'Your next meeting is at ten with the design team and it runs for an hour.',
+            ]);
+            assert.equal(spoken.length, before);
+            setCall(threadId, callId, false);
+            assert.equal(liveClosed, 1);
+          } finally {
+            setCall(threadId, callId, false);
+          }
+        },
+      );
 
       await t.test(
         'spoken replies preserve audio from any message joined into a running turn',

@@ -2,11 +2,17 @@ import { randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { GeneratedAudio, LiveTranscription } from '../ports/speech.ts';
+import type {
+  GeneratedAudio,
+  LiveCall,
+  LiveCallEvent,
+  LiveTranscription,
+} from '../ports/speech.ts';
 import type { ProviderUsageEvent } from '../ports/provider-usage.ts';
 import { SpeechProviderError } from '../ports/speech.ts';
 import type { SpeechService } from './speech.ts';
 import { callAudio } from './events.ts';
+import { logFailure } from '../ports/failure-log.ts';
 
 const heartbeatMs = 20_000;
 const clipMs = 120_000;
@@ -123,7 +129,10 @@ export function setCall(threadId: string, callId: string, active: boolean) {
   if (active) clients.set(callId, Date.now() + heartbeatMs);
   else clients.delete(callId);
   if (clients.size) calls.set(threadId, clients);
-  else calls.delete(threadId);
+  else {
+    calls.delete(threadId);
+    endLive(threadId);
+  }
 }
 
 export function speakable(text: string) {
@@ -260,11 +269,195 @@ export function callSpeaker(input: {
   };
 }
 
+const liveInstructions = `You are Nod, the owner's personal assistant, talking with them on a live voice call. Speak naturally in their language, in one to three short sentences.
+You hold the conversation. You can't see the owner's email, calendar, files, apps, memory or earlier work, and you can't take any action yourself.
+Delegate whenever the owner asks for anything beyond simple conversation: facts, news, anything to look up, their data or apps, any task or action, what Nod can do, anything about earlier work, and every answer to a question Nod asked them. When you delegate, give at most a brief acknowledgement.
+Results from delegated work and from Nod arrive later. Say them faithfully in your own words, without adding facts, names, numbers or promises.
+Never say that something was done, sent, booked, bought or changed unless a result says so. Never answer a question Nod asked the owner for them, and never approve anything: only the owner's own words count.
+If the owner asks you to stop or wait, stop talking.`;
+
+const backendInstructions = `You do the work behind Nod's voice call. Answer in short, plain spoken sentences without Markdown or links.
+Use web_search for public or current information such as news, weather, prices, opening hours and general facts.
+Call ask_nod for everything else: the owner's own email, calendar, files, messages, accounts, apps, memory, tasks or earlier work with Nod, what Nod can do, and any action, change, purchase, message or approval. Never guess about the owner's own information.
+After ask_nod, say only that Nod is on it; Nod's answer will follow.`;
+
+const handoff =
+  "Pass the owner's latest request to Nod's agent, which has the owner's apps, data, memory and tools and can act after checking the owner's permission. Use for anything that isn't public information.";
+
+type Live = {
+  threadId: string;
+  session: LiveCall;
+  heard: string[];
+  lastHeard: number;
+  awaiting: boolean;
+  quiet?: ReturnType<typeof setTimeout>;
+  queue: Promise<void>;
+  replied: boolean;
+};
+const lives = new Map<string, Live>();
+
+export type SubmitHeard = (text: string, threadId: string) => Promise<unknown>;
+export type CallHistory = (
+  threadId: string,
+) => Promise<Array<{ role: 'user' | 'assistant'; text: string }>>;
+
+function endLive(threadId: string, live?: Live) {
+  const current = lives.get(threadId);
+  if (!current || (live && current !== live)) return;
+  lives.delete(threadId);
+  clearTimeout(current.quiet);
+  current.session.close();
+}
+
+export function liveCall(threadId: string) {
+  const live = lives.get(threadId);
+  if (live && !inCall(threadId)) {
+    endLive(threadId, live);
+    return;
+  }
+  return live;
+}
+
+function takeHeard(live: Live, callId: string | null, submit: SubmitHeard) {
+  live.queue = live.queue.then(async () => {
+    for (let waited = 0; waited < 2_000 && Date.now() - live.lastHeard < 500; waited += 100)
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    clearTimeout(live.quiet);
+    const text = live.heard.join('').replace(/\s+/g, ' ').trim();
+    live.heard = [];
+    if (!text) {
+      if (callId) live.session.complete(callId, 'Nod already has this request.');
+      return;
+    }
+    live.awaiting = false;
+    try {
+      await submit(text, live.threadId);
+      if (callId) live.session.complete(callId, 'Nod is working on it.');
+    } catch (error) {
+      logFailure('live_call_message_failed', error, { threadId: live.threadId });
+      const reason = `Nod could not take that request: ${error instanceof Error ? error.message : 'unknown error'}`;
+      if (callId) live.session.complete(callId, reason);
+      else live.session.say(reason, null);
+    }
+  });
+}
+
+export function awaitOnCall(threadId: string) {
+  const live = liveCall(threadId);
+  if (live) live.awaiting = true;
+}
+
+export function liveSpeaker(threadId: string, signal: AbortSignal) {
+  const live = liveCall(threadId);
+  if (!live) return;
+  const pending = new Map<string, string>();
+  const voiced = new Set<string>();
+  let spoken = 0;
+  const say = (text: string) => {
+    const clean = speakable(text);
+    if (!clean || signal.aborted || lives.get(threadId) !== live) return;
+    spoken++;
+    live.session.say(clean, null);
+  };
+  return {
+    say,
+    push(text: string, streamId: string, done = false) {
+      voiced.add(streamId);
+      const buffered = (pending.get(streamId) ?? '') + text;
+      if (done) {
+        pending.delete(streamId);
+        say(buffered);
+        return;
+      }
+      const boundary = Math.max(
+        buffered.lastIndexOf('\n'),
+        ...[...buffered.matchAll(/[.!?]["')\]]*(?=\s|$)/g)].map(
+          (match) => match.index + match[0].length,
+        ),
+      );
+      if (boundary > 0 && (spoken === 0 || boundary >= 160)) {
+        say(buffered.slice(0, boundary));
+        pending.set(streamId, buffered.slice(boundary));
+      } else pending.set(streamId, buffered);
+    },
+    finish(streamId?: string) {
+      for (const [, text] of pending) say(text);
+      pending.clear();
+      return Boolean(streamId && voiced.has(streamId));
+    },
+    async finished() {},
+  };
+}
+
 export function registerCalls(
   app: FastifyInstance,
   ownerId: string,
-  speech?: Pick<SpeechService, 'listen'>,
+  speech?: Pick<SpeechService, 'listen' | 'call'>,
+  live?: { submit: SubmitHeard; history: CallHistory },
 ) {
+  app.post('/api/call/live', async (request) => {
+    const input = z
+      .object({ threadId: z.uuid(), sdp: z.string().min(1).max(100_000) })
+      .strict()
+      .parse(request.body);
+    if (!inCall(input.threadId))
+      throw Object.assign(new Error('Start the call again before speaking.'), {
+        statusCode: 409,
+      });
+    if (!speech || !live)
+      throw Object.assign(new Error('Live calls are not available.'), { statusCode: 409 });
+    endLive(input.threadId);
+    const { submit } = live;
+    const history = await live.history(input.threadId);
+    let call: Live | undefined;
+    const early: LiveCallEvent[] = [];
+    const handle = (event: LiveCallEvent) => {
+      if (!call) {
+        early.push(event);
+        return;
+      }
+      if (lives.get(input.threadId) !== call) return;
+      if (event.type === 'said') call.replied = true;
+      else if (event.type === 'heard') {
+        if (call.replied) call.heard = [];
+        call.replied = false;
+        call.heard.push(event.text);
+        call.lastHeard = Date.now();
+        if (call.awaiting) {
+          clearTimeout(call.quiet);
+          call.quiet = setTimeout(() => takeHeard(call!, null, submit), 1_200);
+        }
+      } else if (event.type === 'delegated') takeHeard(call, event.id, submit);
+      else if (event.type === 'failed')
+        logFailure('live_call_failed', new Error(event.message), { threadId: input.threadId });
+      else if (event.type === 'closed') endLive(input.threadId, call);
+    };
+    const session = await speech.call({
+      sdp: input.sdp,
+      instructions: liveInstructions,
+      backendInstructions,
+      handoff,
+      history,
+      onEvent: handle,
+    });
+    call = {
+      threadId: input.threadId,
+      session,
+      heard: [],
+      lastHeard: 0,
+      awaiting: false,
+      queue: Promise.resolve(),
+      replied: false,
+    };
+    lives.set(input.threadId, call);
+    for (const event of early.splice(0)) handle(event);
+    return { sdp: session.answer };
+  });
+  app.delete('/api/call/live', async (request) => {
+    const input = z.object({ threadId: z.uuid() }).strict().parse(request.body);
+    endLive(input.threadId);
+    return { closed: true };
+  });
   app.post('/api/call/listen', async (request) => {
     const input = z.object({ threadId: z.uuid() }).strict().parse(request.body);
     if (!inCall(input.threadId))

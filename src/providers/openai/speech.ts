@@ -6,6 +6,7 @@ import { speechVoices } from '../../shared/speech.ts';
 import type { OpenAIRegion } from '../../shared/models.ts';
 import { SpeechProviderError } from '../../ports/speech.ts';
 import { openAIBaseUrl, openAIRequestError } from './api.ts';
+import { openLiveCall } from './live.ts';
 
 type SpeechConnection = { key: string; region?: OpenAIRegion };
 
@@ -151,6 +152,9 @@ export function createOpenAISpeechProvider(options: {
         return result.text;
       });
     },
+    async call(input, signal, report) {
+      return openLiveCall(await connection(), input, signal, report, request);
+    },
     async listen(report) {
       const { key, url } = await connection();
       const model = 'gpt-live-transcribe';
@@ -172,6 +176,8 @@ export function createOpenAISpeechProvider(options: {
         reported = true;
         usage.status = status;
         usage.durationMs = Date.now() - started;
+        usage.costUsd = (usage.durationMs / 60_000) * 0.017;
+        usage.pricing = 'sdk_estimate';
         report?.(usage);
       };
       const socket = new WebSocket(`${url.replace(/^http/, 'ws')}/realtime?intent=transcription`, {

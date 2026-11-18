@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { SpeechService } from './speech.ts';
 import { messageInput, registerAudioMessages } from './audio-messages.ts';
+import { registerCalls } from './calls.ts';
 import { messageTooLongError } from '../shared/message-limits.ts';
 import type { ServerResponse } from 'node:http';
 import { z } from 'zod';
@@ -316,6 +317,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
   });
   await app.register(multipart, { limits: { fileSize: fileBytes, files: 1, fields: 5 } });
   const audioMessages = registerAudioMessages(app, dependencies);
+  registerCalls(app);
   app.get('/api/health', async () => {
     await pool.query('SELECT 1');
     return { ok: true };

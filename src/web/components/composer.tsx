@@ -11,6 +11,7 @@ import {
   Mic,
   LoaderCircle,
   CircleAlert,
+  Phone,
 } from './icons';
 import type { Artifact, Message } from '../../shared/contracts';
 import { fileBytes } from '../../shared/files';
@@ -83,6 +84,7 @@ interface ComposerProps {
   ): Promise<ComposerSendResult>;
   onStop?(): void;
   stopping?: boolean;
+  onCall?(): void;
 }
 
 export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Composer(
@@ -97,6 +99,7 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
     onSend,
     onStop,
     stopping = false,
+    onCall,
     draftKey,
     restoreReply,
     replyPreviewPending = false,
@@ -1194,6 +1197,25 @@ export const Composer = forwardRef<ComposerHandle, ComposerProps>(function Compo
                   : microphoneLabel}
               </span>
             </MicrophonePicker>
+            {onCall && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                aria-label="Start a voice call"
+                title="Start a voice call"
+                disabled={!active || !ready || !recorder.supported || hasRecording}
+                onClick={() =>
+                  void prepareAudio()
+                    .then(() => {
+                      if (mounted.current && audioActive.current) onCall();
+                    })
+                    .catch(() => {})
+                }
+              >
+                <Phone size={16} />
+              </Button>
+            )}
             {showStop && (
               <span className="stop-slot">
                 <Button

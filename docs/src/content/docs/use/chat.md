@@ -68,6 +68,14 @@ ElevenLabs and OpenAI voices are multilingual: they speak the language of the re
 
 Under **Free voices**, select **Download** for a one-time download of about 180 MB, with no account needed. The chooser shows download progress, then preparation. Voices become selectable only when preparation completes. You can cancel your download or retry a failed attempt; your current voice stays selected. Local replies offer English, Spanish, French, Hindi, Italian and Brazilian Portuguese voices. Downloads need an internet connection; downloaded voices run on the computer hosting nod. Choose a local assistant voice to keep both transcription and replies local, including when you have an API connection. Local speech can take longer on slower computers. A ChatGPT or Claude subscription alone does not include those providers' speech APIs.
 
+## Talk to Nod in a call
+
+Select the phone beside the microphone to start a voice call in the web or desktop app. Speak normally; when you pause, Nod sends what you said as an audio message in this conversation and plays its reply out loud. Start talking while Nod speaks to interrupt it, or select **Stop speaking**. **Mute** stops listening without ending the call, and **End call** stops it.
+
+During a call, Nod answers chat messages in short spoken sentences with your chosen voice, whatever **Spoken replies** is set to, and reads its questions and confirmations out loud. Your words in a call are ordinary owner messages: approvals, rules, spending limits and Stop work as they do in chat, and only a clear yes approves an action. Codes, passwords and card details still go through private entry on your screen, never through the call. Tasks and background work don't speak during a call. A reply that's still being prepared when you end the call stays as text.
+
+Calls use the same transcription and voice services as audio messages. Nod hears you after you pause and speaks once its reply is complete, so replies that need tools take as long as they do in chat. Use headphones if Nod's voice keeps interrupting itself.
+
 ## See visual answers
 
 When a visual makes an answer easier to understand, nod can include images, maps, flight itineraries and comparisons, seat plans, booking summaries, diagrams, or charts.

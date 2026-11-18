@@ -17,6 +17,7 @@ import './components/telegram-chat-link.css';
 import './components/private-entry.css';
 import './components/app-discovery-dialog.css';
 import './components/composer.css';
+import './components/voice-call.css';
 import './pages/chat.css';
 import './theme.css';
 import './pages/secondary-pages.css';

@@ -1,0 +1,75 @@
+.voice-call {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.voice-call-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 8px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  background: var(--surface-subtle);
+}
+
+.voice-call-orb {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--muted-foreground);
+  transform: scale(calc(1 + var(--level, 0) * 0.6));
+  transition:
+    transform 0.1s linear,
+    background 0.2s ease;
+}
+
+.voice-call-orb.is-hearing,
+.voice-call-orb.is-listening {
+  background: var(--primary);
+}
+
+.voice-call-orb.is-speaking {
+  background: var(--primary);
+  animation: voice-call-pulse 1.2s ease-in-out infinite;
+}
+
+.voice-call-orb.is-sending,
+.voice-call-orb.is-thinking,
+.voice-call-orb.is-starting {
+  animation: voice-call-pulse 1.6s ease-in-out infinite;
+}
+
+.voice-call-orb.is-failed {
+  background: var(--error);
+}
+
+.voice-call-status {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-call-end {
+  gap: 6px;
+}
+
+@keyframes voice-call-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-call-orb {
+    transform: none;
+    animation: none !important;
+  }
+}

@@ -33,6 +33,7 @@ import {
 } from './turn-chain.ts';
 import { dataRoot, databaseUrl, ownerId } from './config.ts';
 import { delta, refresh, working } from './events.ts';
+import { inCall } from './calls.ts';
 import {
   artifactView,
   localArtifacts,
@@ -1946,9 +1947,15 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
     }
     await emit('started', 'Turn started.');
     const checkIn = await dependencies.checkIn?.(turn.session_id, turnId);
+    const calling = () =>
+      turn.session_id === threadId && turn.channel === 'web' && inCall(threadId);
+    const call = calling() && Boolean(dependencies.speech.configured);
     const speech = {
-      mode: (await dependencies.audioReplies?.()) ?? defaultPreferences.speechReply,
+      mode: call
+        ? ('voice' as const)
+        : ((await dependencies.audioReplies?.()) ?? defaultPreferences.speechReply),
       available: Boolean(dependencies.speech.configured),
+      ...(call ? { call: true as const } : {}),
     };
     let scheduleCache: RuntimeContext['scheduleCache'];
     if (turn.source === 'schedule')
@@ -2207,11 +2214,16 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       questionText && result.answerChoices
         ? answerChoicesSchema.parse(result.answerChoices)
         : undefined;
+    const spokenQuestion =
+      questionText ??
+      (result.status === 'waiting_user' && result.waitingFor === 'approval' && calling()
+        ? result.message
+        : undefined);
     let questionAudio: GeneratedAudio | undefined;
     const speechText = (
       questionText && answerChoices
         ? questionWithChoices(questionText, answerChoices)
-        : (questionText ?? finalReply?.text)
+        : (spokenQuestion ?? finalReply?.text)
     )
       ?.replace(/```[\s\S]*?```/g, '')
       .replace(/!?\[([^\]]+)\]\([^)]+\)/g, '$1')
@@ -2220,7 +2232,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       .replace(/(\*\*|__|`)(.*?)\1/g, '$2')
       .trim();
     if (
-      (result.status === 'succeeded' || questionText) &&
+      (result.status === 'succeeded' || spokenQuestion) &&
       ownerMessage &&
       speechText &&
       speechText.length <= 4096 &&
@@ -2229,9 +2241,9 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
     ) {
       try {
         const mode = await dependencies.audioReplies?.();
-        if (mode === 'always' || (mode === 'voice' && voice)) {
+        if (mode === 'always' || (mode === 'voice' && voice) || calling()) {
           const audio = await fenced(() => dependencies.speech.synthesize(speechText, signal))();
-          if (questionText) questionAudio = audio;
+          if (spokenQuestion) questionAudio = audio;
           else if (finalReply) {
             await current(async (client) => {
               const artifact = await artifacts.storeArtifact(

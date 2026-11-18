@@ -21,6 +21,7 @@ import { classifyVerificationReply, securityCodeIn } from '../../shared/verifica
 import { ChatTools } from '../components/chat-tools';
 import { ServiceLogo } from '../components/service-logo';
 import { Composer, type ComposerHandle, type ComposerSendResult } from '../components/composer';
+import { VoiceCall } from '../components/voice-call';
 import { TaskCard } from './tasks';
 import { MessageBubble, type MessageWork } from '../components/message';
 import { conversationFiles } from '../components/attachment-card';
@@ -380,6 +381,7 @@ export function Chat({
   const audioPreviews = useRef(new Map<string, string>());
   const [stopping, setStopping] = useState(false);
   const composer = useRef<ComposerHandle>(null);
+  const [calling, setCalling] = useState(false);
   const sendQueue = useRef(Promise.resolve(true));
   const sendCount = useRef(0);
   const pendingSends = useRef(0);
@@ -2523,6 +2525,16 @@ export function Chat({
               unreadPositioned.current = currentUnreadVisit.current;
             }}
           >
+            {calling && (
+              <VoiceCall
+                key={`${ownerId}.${threadId}`}
+                threadId={threadId}
+                working={working}
+                messages={persistedMessages}
+                send={async (recording) => (await send('', [], null, 'composer', recording)).sent}
+                onEnd={() => setCalling(false)}
+              />
+            )}
             <Composer
               key={`${ownerId}.${threadId}`}
               active={visible}
@@ -2561,6 +2573,7 @@ export function Chat({
                   : undefined
               }
               stopping={stopping}
+              onCall={calling ? undefined : () => setCalling(true)}
             />
           </div>
           {!state.configuration.llmReady &&

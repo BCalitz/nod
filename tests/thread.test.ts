@@ -19,6 +19,7 @@ import { z } from 'zod';
 import type { FeedbackEnvelope } from '../src/ports/feedback.ts';
 import { createN8nFeedback } from '../src/providers/n8n/feedback.ts';
 import { registerFeedback } from '../src/server/feedback.ts';
+import { setCall } from '../src/server/calls.ts';
 import { spendingLimitReached, spendingLimitText } from '../src/server/ledger.ts';
 import {
   feedbackLimits,
@@ -4241,6 +4242,42 @@ test(
           }
         },
       );
+
+      await t.test('a voice call speaks chat replies only while the call is active', async () => {
+        const audioMessages = async (id: string) =>
+          (
+            await db.pool.query(
+              "SELECT id FROM messages WHERE turn_id=$1 AND role='assistant' AND jsonb_array_length(attachments)>0",
+              [id],
+            )
+          ).rows;
+        try {
+          audioReplyMode = 'never';
+          setCall(threadId, true);
+          const before = spoken.length;
+          const called = await thread.submitUserMessage('Synthetic call question.');
+          await waitFor(settled(called.turnId));
+          assert.deepEqual(runs.find((run) => run.turnId === called.turnId)!.speech, {
+            mode: 'voice',
+            available: true,
+            call: true,
+          });
+          assert.equal(spoken.length, before + 1);
+          assert.equal((await audioMessages(called.turnId)).length, 1);
+          setCall(threadId, false);
+          const after = await thread.submitUserMessage('Synthetic question after the call.');
+          await waitFor(settled(after.turnId));
+          assert.deepEqual(runs.find((run) => run.turnId === after.turnId)!.speech, {
+            mode: 'never',
+            available: true,
+          });
+          assert.equal(spoken.length, before + 1);
+          assert.equal((await audioMessages(after.turnId)).length, 0);
+        } finally {
+          setCall(threadId, false);
+          audioReplyMode = 'never';
+        }
+      });
 
       await t.test(
         'spoken replies preserve audio from any message joined into a running turn',

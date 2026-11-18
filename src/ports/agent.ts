@@ -137,7 +137,7 @@ export interface RuntimeContext {
   mcpServers?: ConnectedMcpServer[];
   currentMessageId?: string;
   automatic?: boolean;
-  speech?: { mode: SpeechReplyMode; available: boolean };
+  speech?: { mode: SpeechReplyMode; available: boolean; call?: true };
   firstConversationTurn?: boolean;
   replyTo?: {
     id: string;

@@ -424,6 +424,7 @@ export const toolDefinitions = {
         { additionalProperties: false },
       ),
     ]),
+    true,
   ),
   pay: defineTool(
     'pay',
@@ -445,6 +446,7 @@ export const toolDefinitions = {
         ]),
       ]),
     }),
+    true,
   ),
   browser_session: defineTool(
     'browser_session',
@@ -476,6 +478,7 @@ export const toolDefinitions = {
         { additionalProperties: false },
       ),
     ]),
+    true,
   ),
   apps: defineTool(
     'apps',

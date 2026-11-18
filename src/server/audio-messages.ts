@@ -10,6 +10,7 @@ import { lockThread, stopSignal, submitUserMessage } from './thread.ts';
 import { transaction } from './transaction.ts';
 import { refresh } from './events.ts';
 import { SpeechSetupError } from './speech.ts';
+import { heardOnCall } from './calls.ts';
 import type { SubmitMessageResponse } from '../shared/contracts.ts';
 import { classifyVerificationReply, securityCodeIn } from '../shared/verification-code.ts';
 import { questionAnswerSchema } from '../shared/answer-choices.ts';
@@ -114,10 +115,21 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
           }
         }
       }
-      if (!recording) throw invalid('Choose an audio recording.');
-      const { call = false, ...input } = messageInput
-        .extend({ clientMessageId: z.uuid(), threadId: z.uuid(), call: z.boolean().optional() })
+      if (!recording && !(rawMessage && typeof rawMessage === 'object' && 'listenId' in rawMessage))
+        throw invalid('Choose an audio recording.');
+      const {
+        call = false,
+        listenId,
+        ...input
+      } = messageInput
+        .extend({
+          clientMessageId: z.uuid(),
+          threadId: z.uuid(),
+          call: z.boolean().optional(),
+          listenId: z.uuid().optional(),
+        })
         .refine((value) => !value.approvalAnswer)
+        .refine((value) => !value.listenId || value.call)
         .refine(
           (value) =>
             !value.questionAnswer ||
@@ -130,9 +142,14 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
       signal.throwIfAborted();
       const speech = dependencies.speech;
       const fingerprint = createHash('sha256')
-        .update(JSON.stringify({ input, mimeType: recording.mimeType, name: recording.name }))
+        .update(
+          JSON.stringify({
+            input,
+            ...(recording ? { mimeType: recording.mimeType, name: recording.name } : { listenId }),
+          }),
+        )
         .update('\0')
-        .update(recording.bytes)
+        .update(recording?.bytes ?? '')
         .digest('hex');
       const accepted = await transaction(async (client) => {
         const thread = await lockThread(client);
@@ -201,9 +218,10 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
       }, pool);
       if (accepted.response) return accepted.response;
       const usageIds = new Set<string>();
-      const transcript = await speech!.transcribe(recording, signal, (usage) =>
-        usageIds.add(usage.id),
-      );
+      const heard = (usage: { id: string }) => usageIds.add(usage.id);
+      const transcript = recording
+        ? await speech!.transcribe(recording, signal, heard)
+        : await heardOnCall(listenId!, ownerId, speech!, signal, heard);
       signal.throwIfAborted();
       const text = [input.text, transcript].filter(Boolean).join('\n\n');
       const displayText = call ? undefined : input.displayText;
@@ -260,7 +278,7 @@ export function registerAudioMessages(app: FastifyInstance, dependencies: AppDep
           stopSignal: arrival,
           prepareAttachments: async (client, threadId) => {
             signal.throwIfAborted();
-            if (call) return [];
+            if (call || !recording) return [];
             const clip = await artifacts.storeArtifact(
               recording.bytes,
               recording.name,

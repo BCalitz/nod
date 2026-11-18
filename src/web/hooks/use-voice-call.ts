@@ -15,6 +15,106 @@ const silenceMs = 1100;
 const shortestMs = 350;
 const longestMs = 60_000;
 const heartbeatMs = 8_000;
+const liveRate = 24_000;
+const liveFlushMs = 200;
+
+export const liveRecordings = new WeakMap<File, string>();
+
+function resampler(from: number) {
+  if (from === liveRate) return (input: Float32Array) => input;
+  const step = from / liveRate;
+  let carry = new Float32Array(0);
+  let position = 0;
+  return (input: Float32Array) => {
+    const samples = new Float32Array(carry.length + input.length);
+    samples.set(carry);
+    samples.set(input, carry.length);
+    const output: number[] = [];
+    while (position + 1 < samples.length) {
+      const index = Math.floor(position);
+      const fraction = position - index;
+      output.push(samples[index] * (1 - fraction) + samples[index + 1] * fraction);
+      position += step;
+    }
+    const kept = Math.floor(position);
+    carry = samples.slice(kept);
+    position -= kept;
+    return Float32Array.from(output);
+  };
+}
+
+function pcmBase64(chunks: Float32Array[]) {
+  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
+  const bytes = new Uint8Array(length * 2);
+  const view = new DataView(bytes.buffer);
+  let offset = 0;
+  for (const chunk of chunks)
+    for (const sample of chunk) {
+      const value = Math.max(-1, Math.min(1, sample));
+      view.setInt16(offset, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+      offset += 2;
+    }
+  let text = '';
+  for (let index = 0; index < bytes.length; index += 0x8000)
+    text += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(text);
+}
+
+function liveListener(threadId: string, rate: number) {
+  const convert = resampler(rate);
+  let pending: Float32Array[] = [];
+  let id: string | undefined;
+  let failed = false;
+  let posting = Promise.resolve();
+  const opened = api<{ id: string }>('/api/call/listen', {
+    method: 'POST',
+    body: JSON.stringify({ threadId }),
+  })
+    .then((result) => {
+      id = result.id;
+    })
+    .catch(() => {
+      failed = true;
+    });
+  const flush = () => {
+    if (!id || failed || !pending.length) return;
+    const audio = pcmBase64(pending);
+    pending = [];
+    const target = id;
+    posting = posting.then(() =>
+      api(`/api/call/listen/${target}`, { method: 'POST', body: JSON.stringify({ audio }) })
+        .then(() => {})
+        .catch(() => {
+          failed = true;
+        }),
+    );
+  };
+  const timer = window.setInterval(flush, liveFlushMs);
+  const close = () => {
+    window.clearInterval(timer);
+    failed = true;
+    void opened.then(() => {
+      if (id) void api(`/api/call/listen/${id}`, { method: 'DELETE' }).catch(() => {});
+    });
+  };
+  return {
+    push(samples: Float32Array) {
+      if (!failed) pending.push(convert(samples));
+    },
+    async end() {
+      window.clearInterval(timer);
+      await opened;
+      flush();
+      await posting;
+      if (failed) {
+        close();
+        return undefined;
+      }
+      return id;
+    },
+    cancel: close,
+  };
+}
 
 function savedMicrophone() {
   try {
@@ -237,6 +337,7 @@ export function useVoiceCall({
     let processor: ScriptProcessorNode | undefined;
     let started = 0;
     let sent = 0;
+    let listener: ReturnType<typeof liveListener> | undefined;
     (async () => {
       try {
         const deviceId = savedMicrophone();
@@ -251,7 +352,7 @@ export function useVoiceCall({
         if (closed) return;
         let source: MediaStreamAudioSourceNode;
         try {
-          context = new AudioContext({ sampleRate: 16_000 });
+          context = new AudioContext({ sampleRate: liveRate });
           source = context.createMediaStreamSource(stream);
         } catch {
           void context?.close().catch(() => {});
@@ -278,6 +379,8 @@ export function useVoiceCall({
         let shown = 0;
         const finish = () => {
           capturing = false;
+          const live = listener;
+          listener = undefined;
           const captured = chunks;
           const duration = spokenMs;
           chunks = [];
@@ -285,14 +388,19 @@ export function useVoiceCall({
           quietMs = 0;
           if (phaseRef.current === 'hearing') phaseRef.current = 'listening';
           if (duration < shortestMs) {
+            live?.cancel();
             release(false);
             idle();
             return;
           }
           sending.current++;
           show('sending');
-          void sendRef
-            .current(waveFile(captured, rate))
+          void (live?.end() ?? Promise.resolve(undefined))
+            .then((listenId) => {
+              const recording = waveFile(captured, rate);
+              if (listenId) liveRecordings.set(recording, listenId);
+              return sendRef.current(recording);
+            })
             .then((delivered) => {
               if (delivered) sent++;
             })
@@ -335,6 +443,8 @@ export function useVoiceCall({
             if (loud < (interrupting ? interruptFrames : startFrames)) return;
             hold();
             capturing = true;
+            listener = liveListener(threadId, rate);
+            for (const chunk of recent) listener.push(chunk);
             chunks = [...recent];
             recent.length = 0;
             spokenMs = loud * frameMs;
@@ -344,6 +454,7 @@ export function useVoiceCall({
             return;
           }
           chunks.push(samples);
+          listener?.push(samples);
           spokenMs += frameMs;
           quietMs = voiced ? 0 : quietMs + frameMs;
           if (quietMs >= silenceMs || spokenMs >= longestMs) finish();
@@ -373,6 +484,7 @@ export function useVoiceCall({
       window.clearInterval(heartbeat);
       void beat(false);
       stopSpeaking();
+      listener?.cancel();
       if (processor) processor.onaudioprocess = null;
       for (const track of stream?.getTracks() ?? []) track.stop();
       void context?.close().catch(() => {});

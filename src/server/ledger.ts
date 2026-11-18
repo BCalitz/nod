@@ -712,6 +712,31 @@ export function createLedger({
             },
           } satisfies Pick<SpeechProvider, 'transcribe'>)
         : {}),
+      ...(base.listen
+        ? ({
+            async listen(onUsage) {
+              const live = await base.listen!((usage) => {
+                report(usage, true);
+                onUsage?.(usage);
+              });
+              if (!live) return;
+              return {
+                append: (pcm) => live.append(pcm),
+                async finish(signal) {
+                  try {
+                    return await live.finish(signal);
+                  } finally {
+                    await flushUsage();
+                  }
+                },
+                close() {
+                  live.close();
+                  void flushUsage().catch(() => {});
+                },
+              };
+            },
+          } satisfies Pick<SpeechProvider, 'listen'>)
+        : {}),
     };
   }
 

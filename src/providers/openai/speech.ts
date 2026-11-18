@@ -151,6 +151,116 @@ export function createOpenAISpeechProvider(options: {
         return result.text;
       });
     },
+    async listen(report) {
+      const { key, url } = await connection();
+      const model = 'gpt-live-transcribe';
+      const started = Date.now();
+      const usage: ProviderUsageEvent = {
+        id: randomUUID(),
+        provider: 'openai',
+        category: 'agent',
+        operation: 'transcribe',
+        model,
+        status: 'failed',
+        durationMs: 0,
+        costUsd: null,
+        pricing: 'unavailable',
+      };
+      let reported = false;
+      const settle = (status: ProviderUsageEvent['status']) => {
+        if (reported) return;
+        reported = true;
+        usage.status = status;
+        usage.durationMs = Date.now() - started;
+        report?.(usage);
+      };
+      const socket = new WebSocket(`${url.replace(/^http/, 'ws')}/realtime?intent=transcription`, {
+        headers: { Authorization: `Bearer ${key}` },
+      } as unknown as string[]);
+      const queued: string[] = [];
+      let transcript: string | undefined;
+      let failure: Error | undefined;
+      let wake = () => {};
+      const send = (event: object) => {
+        const data = JSON.stringify(event);
+        if (socket.readyState === WebSocket.OPEN) socket.send(data);
+        else if (socket.readyState === WebSocket.CONNECTING) queued.push(data);
+      };
+      socket.onopen = () => {
+        for (const data of queued.splice(0)) socket.send(data);
+      };
+      socket.onmessage = (message) => {
+        let event: {
+          type?: string;
+          transcript?: unknown;
+          error?: { message?: unknown; code?: unknown };
+        };
+        try {
+          event = JSON.parse(String(message.data));
+        } catch {
+          return;
+        }
+        if (
+          event.type === 'conversation.item.input_audio_transcription.completed' &&
+          typeof event.transcript === 'string'
+        )
+          transcript = event.transcript;
+        else if (
+          event.type === 'error' ||
+          event.type === 'conversation.item.input_audio_transcription.failed'
+        )
+          failure ??= new SpeechProviderError(
+            `OpenAI live transcription failed: ${String(event.error?.message ?? event.error?.code ?? event.type)}`,
+          );
+        else return;
+        wake();
+      };
+      socket.onclose = (event) => {
+        failure ??= new SpeechProviderError(
+          `OpenAI live transcription closed (${event.code}${event.reason ? `: ${event.reason}` : ''}).`,
+        );
+        wake();
+      };
+      send({
+        type: 'session.update',
+        session: {
+          type: 'transcription',
+          audio: {
+            input: {
+              format: { type: 'audio/pcm', rate: 24_000 },
+              transcription: { model },
+              turn_detection: null,
+            },
+          },
+        },
+      });
+      return {
+        append(pcm) {
+          if (pcm.length)
+            send({ type: 'input_audio_buffer.append', audio: pcm.toString('base64') });
+        },
+        async finish(signal) {
+          send({ type: 'input_audio_buffer.commit' });
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+            if (transcript !== undefined || failure || signal?.aborted) resolve();
+            signal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+          socket.close();
+          if (transcript !== undefined) {
+            settle('succeeded');
+            return transcript;
+          }
+          settle(signal?.aborted ? 'cancelled' : 'failed');
+          signal?.throwIfAborted();
+          throw failure ?? new SpeechProviderError('OpenAI live transcription returned no text.');
+        },
+        close() {
+          socket.close();
+          settle('cancelled');
+        },
+      };
+    },
     async synthesize(text, signal, report, synthesis) {
       signal?.throwIfAborted();
       const selected = voices.find((voice) => voice.id === (synthesis?.voice ?? defaultVoice));

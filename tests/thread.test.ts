@@ -272,6 +272,8 @@ test(
     let transcript = 'Synthetic spoken request';
     let transcriptionError: Error | undefined;
     let transcriptionGate: Promise<void> | undefined;
+    const liveAudio: Buffer[] = [];
+    let liveFailure: Error | undefined;
     let synthesisGate: Promise<void> | undefined;
     let synthesisError: Error | undefined;
     let audioReplyMode: 'auto' | 'voice' | 'always' | 'never' = 'never';
@@ -281,6 +283,16 @@ test(
       id: 'fixture',
       get configured() {
         return speechReady;
+      },
+      async listen() {
+        return {
+          append: (pcm: Buffer) => void liveAudio.push(pcm),
+          async finish() {
+            if (liveFailure) throw liveFailure;
+            return 'Synthetic live transcript';
+          },
+          close() {},
+        };
       },
       async transcribe(audio, signal) {
         transcriptions.push({ bytes: Buffer.from(audio.bytes), name: audio.name, signal });
@@ -1872,6 +1884,52 @@ test(
           assert.equal(callStored.text, 'Synthetic spoken request');
           assert.equal(callStored.audio_caption, null);
           assert.deepEqual(callStored.attachments, []);
+          const callId = randomUUID();
+          assert.equal((await request('POST', '/api/call/listen', { threadId })).statusCode, 409);
+          setCall(threadId, callId, true);
+          try {
+            const pcm = Buffer.from([1, 0, 2, 0, 3, 0, 4, 0]);
+            const listen = async () => {
+              liveAudio.length = 0;
+              const opened = await request('POST', '/api/call/listen', { threadId });
+              assert.equal(opened.statusCode, 200, opened.body);
+              const { id } = opened.json<{ id: string }>();
+              const appended = await request('POST', `/api/call/listen/${id}`, {
+                audio: pcm.toString('base64'),
+              });
+              assert.equal(appended.statusCode, 200, appended.body);
+              return id;
+            };
+            const heard = async (listenId: string) => {
+              const sent = await app.inject({
+                method: 'POST',
+                url: '/api/messages/audio',
+                headers: { ...headers, 'content-type': 'multipart/form-data; boundary=live' },
+                payload: `--live\r\nContent-Disposition: form-data; name="message"\r\n\r\n${JSON.stringify({ threadId, clientMessageId: randomUUID(), text: '', call: true, listenId })}\r\n--live--\r\n`,
+              });
+              assert.equal(sent.statusCode, 200, sent.body);
+              return (
+                await db.pool.query('SELECT text,attachments FROM messages WHERE id=$1', [
+                  sent.json<SubmitMessageResponse>().messageId,
+                ])
+              ).rows[0];
+            };
+            const batches = transcriptions.length;
+            const live = await heard(await listen());
+            assert.equal(live.text, 'Synthetic live transcript');
+            assert.deepEqual(live.attachments, []);
+            assert.deepEqual(Buffer.concat(liveAudio), pcm);
+            assert.equal(transcriptions.length, batches);
+            liveFailure = new Error('Synthetic live failure');
+            const fallback = await heard(await listen());
+            assert.equal(fallback.text, 'Synthetic spoken request');
+            assert.equal(transcriptions.length, batches + 1);
+            assert.equal(transcriptions.at(-1)!.name, 'call.wav');
+            assert.deepEqual(transcriptions.at(-1)!.bytes.subarray(44), pcm);
+          } finally {
+            liveFailure = undefined;
+            setCall(threadId, callId, false);
+          }
           const before = transcriptions.length;
           const accepted = await sendAudio(message);
           assert.equal(accepted.statusCode, 200, accepted.body);

@@ -107,6 +107,10 @@ export function createSpeech(provider: SpeechProvider) {
       signal?.throwIfAborted();
       await cancellable(provider.refreshVoices?.(signal, force) ?? Promise.resolve(), signal);
     },
+    async listen(report?: (usage: ProviderUsageEvent) => void) {
+      if (!(provider.transcriptionConfigured ?? provider.configured)) return;
+      return provider.listen?.(report).catch(() => undefined);
+    },
     async transcribe(
       audio: { bytes: Uint8Array; mimeType: string; name: string },
       signal?: AbortSignal,

@@ -574,6 +574,16 @@ export function createDefaultAdapters(
                       : localSpeech;
         return selected.synthesize(text, signal, report, options);
       },
+      listen: async (report) => {
+        const voice = (await voicePreferences.get()).speechVoice;
+        if (
+          voice?.startsWith('local:') ||
+          voice?.startsWith('elevenlabs-direct:') ||
+          !openAISpeech.configured
+        )
+          return undefined;
+        return openAISpeech.listen!(report);
+      },
       transcribe: async (audio, signal, report) => {
         const voice = (await voicePreferences.get()).speechVoice;
         const local = voice?.startsWith('local:');

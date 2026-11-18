@@ -47,6 +47,7 @@ import { NodGlyph, Rise, prefersReducedMotion } from '../components/motion';
 import { LiveLine } from '../components/live-line';
 import { TaskDots } from '../components/task-dots';
 import { recordingSource } from '../lib/recording';
+import { liveRecordings } from '../hooks/use-voice-call';
 import { money } from '../lib/money';
 import type { ImagePreview } from '../components/attachment-images';
 import { reuseFile } from '../components/file-actions';
@@ -1296,6 +1297,10 @@ export function Chat({
         : null;
     const id = previousAttempt?.id ?? crypto.randomUUID();
     const submittedRecording = previousAttempt?.recording ?? recording;
+    const listenId =
+      source === 'voice_call' && submittedRecording
+        ? liveRecordings.get(submittedRecording)
+        : undefined;
     let audio: ImagePreview | undefined;
     if (submittedRecording && !privateVerification && source !== 'voice_call') {
       const previousUrl = audioPreviews.current.get(id);
@@ -1438,14 +1443,14 @@ export function Chat({
           ...(verificationRequestId ? { verificationRequestId } : {}),
           ...(questionAnswer ? { questionAnswer } : {}),
           ...(approvalAnswer ? { approvalAnswer } : {}),
-          ...(source === 'voice_call' ? { call: true } : {}),
+          ...(source === 'voice_call' ? { call: true, ...(listenId ? { listenId } : {}) } : {}),
         });
       submittedBody = messageBody;
       let body: string | FormData = messageBody;
       if (submittedRecording) {
         body = new FormData();
         body.append('message', messageBody);
-        body.append('file', submittedRecording);
+        if (!listenId) body.append('file', submittedRecording);
       }
       const response = await apiResponse(recording ? '/api/messages/audio' : '/api/messages', {
         method: 'POST',

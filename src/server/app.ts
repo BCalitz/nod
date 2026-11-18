@@ -317,7 +317,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
   });
   await app.register(multipart, { limits: { fileSize: fileBytes, files: 1, fields: 5 } });
   const audioMessages = registerAudioMessages(app, dependencies);
-  registerCalls(app, ownerId);
+  registerCalls(app, ownerId, dependencies.speech);
   app.get('/api/health', async () => {
     await pool.query('SELECT 1');
     return { ok: true };

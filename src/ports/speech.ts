@@ -9,6 +9,12 @@ export interface SpeechSynthesisOptions {
   stream?(chunk: Buffer, mimeType: string): void;
 }
 
+export interface LiveTranscription {
+  append(pcm: Buffer): void;
+  finish(signal?: AbortSignal): Promise<string>;
+  close(): void;
+}
+
 export interface GeneratedAudio {
   bytes: Buffer;
   mimeType: string;
@@ -27,6 +33,7 @@ export interface SpeechProvider {
     report?: (usage: ProviderUsageEvent) => void,
     options?: SpeechSynthesisOptions,
   ): Promise<GeneratedAudio>;
+  listen?(report?: (usage: ProviderUsageEvent) => void): Promise<LiveTranscription | undefined>;
   transcribe?(
     audio: {
       bytes: Uint8Array;

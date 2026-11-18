@@ -101,7 +101,9 @@ export function useVoiceCall({
   workingRef.current = working;
   const sendRef = useRef(send);
   sendRef.current = send;
-  const queue = useRef<string[]>([]);
+  const queue = useRef<Array<{ url: string; turnId: string | null }>>([]);
+  const silenced = useRef(new Set<string>());
+  const playing = useRef<string | null>(null);
   const played = useRef<Set<string> | null>(null);
   const since = useRef('');
   const player = useRef<HTMLAudioElement | null>(null);
@@ -126,7 +128,10 @@ export function useVoiceCall({
   };
 
   const stopSpeaking = () => {
+    for (const turnId of [playing.current, ...queue.current.map((item) => item.turnId)])
+      if (turnId) silenced.current.add(turnId);
     queue.current = [];
+    playing.current = null;
     const current = player.current;
     player.current = null;
     speaking.current = false;
@@ -141,18 +146,20 @@ export function useVoiceCall({
 
   const playNext = () => {
     if (speaking.current) return;
-    const url = queue.current.shift();
-    if (!url) {
+    const next = queue.current.shift();
+    if (!next) {
       idle();
       return;
     }
-    const audio = new Audio(url);
+    playing.current = next.turnId;
+    const audio = new Audio(next.url);
     player.current = audio;
     speaking.current = true;
     show('speaking');
     const done = () => {
       if (player.current !== audio) return;
       player.current = null;
+      playing.current = null;
       speaking.current = false;
       playNext();
     };
@@ -176,7 +183,8 @@ export function useVoiceCall({
       const audio = audioReply(message);
       if (!audio) continue;
       played.current.add(message.id);
-      queue.current.push(audio.url);
+      if (message.turnId && silenced.current.has(message.turnId)) continue;
+      queue.current.push({ url: audio.url, turnId: message.turnId });
     }
     playNext();
   }, [active, messages]);
@@ -184,6 +192,18 @@ export function useVoiceCall({
   useEffect(() => {
     if (active) idle();
   }, [active, working]);
+
+  useEffect(() => {
+    if (!active) return;
+    const clip = (event: Event) => {
+      const { id, turnId } = (event as CustomEvent<{ id: string; turnId: string }>).detail;
+      if (silenced.current.has(turnId)) return;
+      queue.current.push({ url: `/api/call/audio/${encodeURIComponent(id)}`, turnId });
+      playNext();
+    };
+    window.addEventListener('nod:call-audio', clip);
+    return () => window.removeEventListener('nod:call-audio', clip);
+  }, [active]);
 
   useEffect(() => {
     if (!active) return;

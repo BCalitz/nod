@@ -74,7 +74,7 @@ Select the phone beside the microphone to start a voice call in the web or deskt
 
 During a call, Nod answers chat messages in short spoken sentences with your chosen voice, whatever **Spoken replies** is set to, and reads its questions and confirmations out loud. Your words in a call are ordinary owner messages: approvals, rules, spending limits and Stop work as they do in chat, and only a clear yes approves an action. Codes, passwords and card details still go through private entry on your screen, never through the call. Tasks and background work don't speak during a call. A reply that's still being prepared when you end the call stays as text.
 
-Calls use the same transcription and voice services as audio messages. Nod hears you after you pause and speaks once its reply is complete, so replies that need tools take as long as they do in chat. Use headphones if Nod's voice keeps interrupting itself.
+Calls use the same transcription and voice services as audio messages. Nod hears you after you pause and starts speaking as soon as the first sentence of its reply is written, one sentence at a time. Interrupting stops the rest of that reply's speech; the full reply stays in the chat as text. Replies spoken this way aren't saved as audio messages. Work that needs tools still takes as long as it does in chat. Use headphones if Nod's voice keeps interrupting itself.
 
 ## See visual answers
 

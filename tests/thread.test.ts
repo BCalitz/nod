@@ -20,6 +20,7 @@ import type { FeedbackEnvelope } from '../src/ports/feedback.ts';
 import { createN8nFeedback } from '../src/providers/n8n/feedback.ts';
 import { registerFeedback } from '../src/server/feedback.ts';
 import { setCall } from '../src/server/calls.ts';
+import { events, type ServerEvent } from '../src/server/events.ts';
 import { spendingLimitReached, spendingLimitText } from '../src/server/ledger.ts';
 import {
   feedbackLimits,
@@ -664,6 +665,18 @@ test(
           context.delta('Old stream', randomUUID());
           await new Promise<void>((resolve) =>
             context.signal.addEventListener('abort', () => resolve(), { once: true }),
+          );
+          return { status: 'succeeded' };
+        }
+        if (context.prompt === 'Synthetic streamed call reply.') {
+          const stream = randomUUID();
+          context.delta('Sure, checking now.', stream);
+          context.delta(' Your next meeting is at ten with the design team', stream);
+          context.delta(' and it runs for an hour.', stream);
+          context.delta('', stream, true);
+          await context.reply(
+            'Sure, checking now. Your next meeting is at ten with the design team and it runs for an hour.',
+            stream,
           );
           return { status: 'succeeded' };
         }
@@ -4281,6 +4294,29 @@ test(
           await waitFor(settled(resumed));
           assert.equal(spoken.length, before + 2);
           assert.equal((await audioMessages(resumed)).length, 1);
+          const clips: Array<{ turnId: string; sequence: number }> = [];
+          const listen = (event: ServerEvent) => {
+            if (event.type === 'call_audio') clips.push(event);
+          };
+          events.on('event', listen);
+          try {
+            const streamed = await thread.submitUserMessage('Synthetic streamed call reply.');
+            await waitFor(settled(streamed.turnId));
+            assert.deepEqual(spoken.slice(before + 2).sort(), [
+              'Sure, checking now.',
+              'Your next meeting is at ten with the design team and it runs for an hour.',
+            ]);
+            assert.deepEqual(
+              clips.map(({ turnId, sequence }) => ({ turnId, sequence })),
+              [
+                { turnId: streamed.turnId, sequence: 0 },
+                { turnId: streamed.turnId, sequence: 1 },
+              ],
+            );
+            assert.equal((await audioMessages(streamed.turnId)).length, 0);
+          } finally {
+            events.off('event', listen);
+          }
           setCall(threadId, callId, false);
           const after = await thread.submitUserMessage('Synthetic question after the call.');
           await waitFor(settled(after.turnId));
@@ -4288,7 +4324,7 @@ test(
             mode: 'never',
             available: true,
           });
-          assert.equal(spoken.length, before + 2);
+          assert.equal(spoken.length, before + 4);
           assert.equal((await audioMessages(after.turnId)).length, 0);
         } finally {
           setCall(threadId, callId, false);

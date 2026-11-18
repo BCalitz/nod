@@ -33,7 +33,7 @@ import {
 } from './turn-chain.ts';
 import { dataRoot, databaseUrl, ownerId } from './config.ts';
 import { delta, refresh, working } from './events.ts';
-import { inCall } from './calls.ts';
+import { callSpeaker, inCall, speakable } from './calls.ts';
 import {
   artifactView,
   localArtifacts,
@@ -1680,7 +1680,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       await ensureCurrent();
       return call(...args);
     };
-  const replies: Array<{ id: string; text: string; source: string }> = [];
+  const replies: Array<{ id: string; text: string; source: string; streamId?: string }> = [];
   let replyCommitted = false;
   let explicitAudio = false;
   const published = new Map<string, Artifact>();
@@ -1751,7 +1751,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       });
       const spoken = presentation && !text.trim() ? presentationText(presentation) : text;
       replyCommitted ||= Boolean(text.trim() || attachments.length || created.size || presentation);
-      if (spoken.trim()) replies.push({ id, text: spoken, source });
+      if (spoken.trim()) replies.push({ id, text: spoken, source, streamId });
       if (plain && spoken.trim())
         plainReplies.push({ id, text: spoken, sourceMessageId: postedFor, handoff });
     } catch (error) {
@@ -1957,6 +1957,17 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       available: Boolean(dependencies.speech.configured),
       ...(call ? { call: true as const } : {}),
     };
+    const speaker =
+      call && ['user', 'resume'].includes(turn.source)
+        ? callSpeaker({
+            ownerId,
+            threadId,
+            turnId,
+            signal,
+            synthesize: fenced((text: string) => dependencies.speech.synthesize(text, signal)),
+            failed: (error) => logFailure('call_speech_failed', error, { threadId, turnId }),
+          })
+        : undefined;
     let scheduleCache: RuntimeContext['scheduleCache'];
     if (turn.source === 'schedule')
       try {
@@ -2025,6 +2036,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       delta: (text, streamId, done) => {
         if (!signal.aborted && !turn.background && turn.channel === 'web')
           delta({ ownerId, channel: turn.channel, threadId, turnId, text, streamId, done });
+        if (!signal.aborted && speaker && streamId) speaker.push(text, streamId, done);
       },
       reactToMessage:
         reactToMessage &&
@@ -2220,17 +2232,11 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
         ? result.message
         : undefined);
     let questionAudio: GeneratedAudio | undefined;
-    const speechText = (
+    const spokenSource =
       questionText && answerChoices
         ? questionWithChoices(questionText, answerChoices)
-        : (spokenQuestion ?? finalReply?.text)
-    )
-      ?.replace(/```[\s\S]*?```/g, '')
-      .replace(/!?\[([^\]]+)\]\([^)]+\)/g, '$1')
-      .replace(/https?:\/\/\S+/g, '')
-      .replace(/^[ \t]*(?:#{1,6}|>|[-*+]|\d+\.)[ \t]+/gm, '')
-      .replace(/(\*\*|__|`)(.*?)\1/g, '$2')
-      .trim();
+        : (spokenQuestion ?? (speaker?.spoke(finalReply?.streamId) ? undefined : finalReply?.text));
+    const speechText = spokenSource === undefined ? undefined : speakable(spokenSource);
     if (
       (result.status === 'succeeded' || spokenQuestion) &&
       (ownerMessage || (turn.source === 'resume' && calling())) &&
@@ -2273,6 +2279,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
         logFailure('speech_reply_failed', error, { threadId, turnId });
       }
     }
+    await speaker?.finished();
     await current(async (client) => {
       if (result.status === 'succeeded') return finishTurn(client, turnId, 'succeeded');
       const waiting = await finishTurn(client, turnId, 'waiting', {

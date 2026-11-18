@@ -317,7 +317,7 @@ export async function createApp(dependencies: AppDependencies = {}) {
   });
   await app.register(multipart, { limits: { fileSize: fileBytes, files: 1, fields: 5 } });
   const audioMessages = registerAudioMessages(app, dependencies);
-  registerCalls(app);
+  registerCalls(app, ownerId);
   app.get('/api/health', async () => {
     await pool.query('SELECT 1');
     return { ok: true };
@@ -619,7 +619,15 @@ export async function createApp(dependencies: AppDependencies = {}) {
                   streamId: event.streamId,
                   done: event.done,
                 }
-              : undefined;
+              : event.type === 'call_audio' && event.ownerId === ownerId
+                ? {
+                    type: 'call_audio',
+                    threadId: event.threadId,
+                    turnId: event.turnId,
+                    id: event.id,
+                    sequence: event.sequence,
+                  }
+                : undefined;
       if (payload && !reply.raw.destroyed) reply.raw.write(`data: ${JSON.stringify(payload)}\n\n`);
     };
     send({ type: 'refresh' });

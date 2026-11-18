@@ -133,7 +133,17 @@ export function useAppState(accountId?: string) {
             streamId?: string;
             done?: boolean;
             items?: Activity[];
+            id?: string;
           };
+          if (
+            data.type === 'call_audio' &&
+            typeof data.id === 'string' &&
+            typeof data.turnId === 'string' &&
+            data.threadId === threadId.current
+          )
+            window.dispatchEvent(
+              new CustomEvent('nod:call-audio', { detail: { id: data.id, turnId: data.turnId } }),
+            );
           if (data.type === 'activity' && Array.isArray(data.items)) {
             const activity = data.items;
             setState((current) => (current ? { ...current, activity } : current));

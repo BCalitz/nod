@@ -4251,9 +4251,13 @@ test(
               [id],
             )
           ).rows;
+        const callId = randomUUID();
+        const otherCall = randomUUID();
         try {
           audioReplyMode = 'never';
-          setCall(threadId, true);
+          setCall(threadId, callId, true);
+          setCall(threadId, otherCall, true);
+          setCall(threadId, otherCall, false);
           const before = spoken.length;
           const called = await thread.submitUserMessage('Synthetic call question.');
           await waitFor(settled(called.turnId));
@@ -4264,17 +4268,30 @@ test(
           });
           assert.equal(spoken.length, before + 1);
           assert.equal((await audioMessages(called.turnId)).length, 1);
-          setCall(threadId, false);
+          await thread.resumeTurn(
+            called.turnId,
+            `synthetic-call-resume:${called.turnId}`,
+            'Synthetic confirmed action finished.',
+          );
+          const resumed = (
+            await db.pool.query<{ id: string }>('SELECT id FROM turns WHERE source_id=$1', [
+              `synthetic-call-resume:${called.turnId}`,
+            ])
+          ).rows[0]!.id;
+          await waitFor(settled(resumed));
+          assert.equal(spoken.length, before + 2);
+          assert.equal((await audioMessages(resumed)).length, 1);
+          setCall(threadId, callId, false);
           const after = await thread.submitUserMessage('Synthetic question after the call.');
           await waitFor(settled(after.turnId));
           assert.deepEqual(runs.find((run) => run.turnId === after.turnId)!.speech, {
             mode: 'never',
             available: true,
           });
-          assert.equal(spoken.length, before + 1);
+          assert.equal(spoken.length, before + 2);
           assert.equal((await audioMessages(after.turnId)).length, 0);
         } finally {
-          setCall(threadId, false);
+          setCall(threadId, callId, false);
           audioReplyMode = 'never';
         }
       });

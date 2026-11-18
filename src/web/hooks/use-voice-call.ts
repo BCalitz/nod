@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Message } from '../../shared/contracts';
 import { api } from '../lib/api';
+import { captureAnalytics } from '../lib/analytics';
 
 export type CallPhase =
   'starting' | 'listening' | 'hearing' | 'sending' | 'thinking' | 'speaking' | 'failed';
@@ -61,6 +62,14 @@ function microphoneError(error: unknown) {
       return 'Your microphone is unavailable. Check that another app is not using it, then start the call again.';
   }
   return 'The call could not start. Check your microphone and try again.';
+}
+
+function messageBucket(count: number) {
+  return count === 0 ? '0' : count === 1 ? '1' : count <= 5 ? '2-5' : '6+';
+}
+
+function durationBucket(ms: number) {
+  return ms < 60_000 ? 'under_1m' : ms < 300_000 ? '1_5m' : '5m_plus';
 }
 
 function audioReply(message: Message) {
@@ -179,10 +188,11 @@ export function useVoiceCall({
   useEffect(() => {
     if (!active) return;
     let closed = false;
+    const callId = crypto.randomUUID();
     const beat = (state: boolean) =>
       api('/api/call', {
         method: 'POST',
-        body: JSON.stringify({ threadId, active: state }),
+        body: JSON.stringify({ threadId, callId, active: state }),
         keepalive: !state,
       }).catch(() => {});
     void beat(true);
@@ -190,6 +200,8 @@ export function useVoiceCall({
     let stream: MediaStream | undefined;
     let context: AudioContext | undefined;
     let processor: ScriptProcessorNode | undefined;
+    let started = 0;
+    let sent = 0;
     (async () => {
       try {
         const deviceId = savedMicrophone();
@@ -245,7 +257,10 @@ export function useVoiceCall({
           show('sending');
           void sendRef
             .current(waveFile(captured, rate))
-            .catch(() => false)
+            .then((delivered) => {
+              if (delivered) sent++;
+            })
+            .catch(() => {})
             .finally(() => {
               sending.current--;
               idle();
@@ -291,15 +306,28 @@ export function useVoiceCall({
           quietMs = voiced ? 0 : quietMs + frameMs;
           if (quietMs >= silenceMs || spokenMs >= longestMs) finish();
         };
+        started = Date.now();
+        captureAnalytics('voice_call_started');
         idle();
       } catch (cause) {
         if (closed) return;
+        captureAnalytics('voice_call_ended', {
+          outcome: 'microphone_failed',
+          messages: '0',
+          duration: 'under_1m',
+        });
         setError(microphoneError(cause));
         show('failed');
       }
     })();
     return () => {
       closed = true;
+      if (started)
+        captureAnalytics('voice_call_ended', {
+          outcome: 'ended',
+          messages: messageBucket(sent),
+          duration: durationBucket(Date.now() - started),
+        });
       window.clearInterval(heartbeat);
       void beat(false);
       stopSpeaking();

@@ -2233,7 +2233,7 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
       .trim();
     if (
       (result.status === 'succeeded' || spokenQuestion) &&
-      ownerMessage &&
+      (ownerMessage || (turn.source === 'resume' && calling())) &&
       speechText &&
       speechText.length <= 4096 &&
       !explicitAudio &&

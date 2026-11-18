@@ -82,10 +82,23 @@ type AnalyticsEvents = {
   chat_message_sent: {
     has_attachments: boolean;
     is_reply: boolean;
-    source: 'composer' | 'task_card' | 'ask_nod' | 'task_reply' | 'answer_choice' | 'approval_card';
+    source:
+      | 'composer'
+      | 'task_card'
+      | 'ask_nod'
+      | 'task_reply'
+      | 'answer_choice'
+      | 'approval_card'
+      | 'voice_call';
     input: 'text' | 'voice';
   };
   chat_stop_requested: undefined;
+  voice_call_started: undefined;
+  voice_call_ended: {
+    outcome: 'ended' | 'microphone_failed';
+    messages: '0' | '1' | '2-5' | '6+';
+    duration: 'under_1m' | '1_5m' | '5m_plus';
+  };
   task_card_started: { kind?: 'immediate' | 'ongoing'; position: number };
   setup_link_clicked: { setup: 'app' | 'vault' | 'browser' };
   browser_handoff_action: { action: 'done' | 'back' | 'reload' | 'expand' | 'collapse' };
@@ -225,10 +238,24 @@ const eventProperties: Record<keyof AnalyticsEvents, Record<string, readonly unk
   chat_message_sent: {
     has_attachments: [true, false],
     is_reply: [true, false],
-    source: ['composer', 'task_card', 'ask_nod', 'task_reply', 'answer_choice', 'approval_card'],
+    source: [
+      'composer',
+      'task_card',
+      'ask_nod',
+      'task_reply',
+      'answer_choice',
+      'approval_card',
+      'voice_call',
+    ],
     input: ['text', 'voice'],
   },
   chat_stop_requested: {},
+  voice_call_started: {},
+  voice_call_ended: {
+    outcome: ['ended', 'microphone_failed'],
+    messages: ['0', '1', '2-5', '6+'],
+    duration: ['under_1m', '1_5m', '5m_plus'],
+  },
   task_card_started: { kind: ['immediate', 'ongoing'], position: [0, 1, 2, 3, 4, 5] },
   setup_link_clicked: { setup: ['app', 'vault', 'browser'] },
   browser_handoff_action: { action: ['done', 'back', 'reload', 'expand', 'collapse'] },

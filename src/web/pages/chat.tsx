@@ -1201,7 +1201,8 @@ export function Chat({
       | 'ask_nod'
       | 'task_reply'
       | 'answer_choice'
-      | 'approval_card' = reply && reply.id === taskReply.current ? 'task_reply' : 'composer',
+      | 'approval_card'
+      | 'voice_call' = reply && reply.id === taskReply.current ? 'task_reply' : 'composer',
     recording?: File,
     questionAnswer?: QuestionAnswer,
     displayText?: string,
@@ -2531,7 +2532,7 @@ export function Chat({
                 threadId={threadId}
                 working={working}
                 messages={persistedMessages}
-                send={async (recording) => (await send('', [], null, 'composer', recording)).sent}
+                send={async (recording) => (await send('', [], null, 'voice_call', recording)).sent}
                 onEnd={() => setCalling(false)}
               />
             )}

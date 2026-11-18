@@ -201,7 +201,7 @@ export function createElevenLabsSpeechProvider(options: {
         throw new Error('The ElevenLabs connection changed.');
       return measured('synthesize', signal, report, async () => {
         const response = await request(
-          `https://api.elevenlabs.io/v1/text-to-speech/${id}?output_format=mp3_44100_128`,
+          `https://api.elevenlabs.io/v1/text-to-speech/${id}${synthesis?.stream ? '/stream' : ''}?output_format=mp3_44100_128`,
           {
             method: 'POST',
             redirect: 'error',
@@ -218,7 +218,12 @@ export function createElevenLabsSpeechProvider(options: {
           await response.body?.cancel().catch(() => {});
           throw new Error('Invalid audio response.');
         }
-        const bytes = await readSpeechResponse(response, 50 * 1024 * 1024, 'ElevenLabs');
+        const bytes = await readSpeechResponse(
+          response,
+          50 * 1024 * 1024,
+          'ElevenLabs',
+          synthesis?.stream && ((chunk) => synthesis.stream!(chunk, 'audio/mpeg')),
+        );
         if (!bytes.length) throw new Error('Invalid audio response.');
         return { bytes, mimeType: 'audio/mpeg', fileName: 'reply.mp3' };
       });

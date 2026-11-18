@@ -962,7 +962,7 @@ async function initializeApplication(
         options?.voice ??
         (await speechPreferences.get()).speechVoice ??
         (await automaticSpeechVoice(speechProvider, text, review, signal));
-      return speechProvider.synthesize(text, signal, report, voice ? { voice } : undefined);
+      return speechProvider.synthesize(text, signal, report, { ...options, voice });
     },
   });
   const memoryStore = createPostgresObjectStore({ database: pool, ownerId });

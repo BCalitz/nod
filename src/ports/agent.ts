@@ -360,6 +360,7 @@ export interface AgentToolOutcome {
 export interface AgentSessionOptions extends ExecutionScope {
   model?: ModelSelection;
   automatic?: boolean;
+  quick?: boolean;
   restricted?: boolean;
   ephemeral?: boolean;
   restartable?: boolean;

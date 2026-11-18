@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Readable } from 'node:stream';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import type { GeneratedAudio } from '../ports/speech.ts';
@@ -8,7 +9,15 @@ const heartbeatMs = 20_000;
 const clipMs = 120_000;
 const clipLimit = 64;
 const calls = new Map<string, Map<string, number>>();
-const clips = new Map<string, { owner: string; audio: GeneratedAudio; expires: number }>();
+type Clip = {
+  owner: string;
+  mimeType?: string;
+  chunks: Buffer[];
+  done: boolean;
+  expires: number;
+  waiting: Set<() => void>;
+};
+const clips = new Map<string, Clip>();
 
 export function inCall(threadId: string) {
   const clients = calls.get(threadId);
@@ -38,32 +47,57 @@ export function speakable(text: string) {
     .trim();
 }
 
-function keepClip(owner: string, audio: GeneratedAudio) {
+function openClip(owner: string) {
   const now = Date.now();
   for (const [id, clip] of clips) if (clip.expires <= now) clips.delete(id);
   while (clips.size >= clipLimit) clips.delete(clips.keys().next().value!);
   const id = randomUUID();
-  clips.set(id, { owner, audio, expires: now + clipMs });
-  return id;
+  const clip: Clip = { owner, chunks: [], done: false, expires: now + clipMs, waiting: new Set() };
+  clips.set(id, clip);
+  return { id, clip };
 }
 
-export function playOnCall(input: {
-  ownerId: string;
-  threadId: string;
-  turnId: string;
-  streamId: string;
-  sequence: number;
-  audio: GeneratedAudio;
-}) {
-  if (!inCall(input.threadId)) return;
+function changed(clip: Clip) {
+  for (const wake of clip.waiting) wake();
+  clip.waiting.clear();
+}
+
+function append(clip: Clip, chunk: Buffer, mimeType: string) {
+  if (clip.done || !chunk.length) return;
+  clip.mimeType ??= mimeType;
+  clip.chunks.push(chunk);
+  changed(clip);
+}
+
+function close(clip: Clip) {
+  clip.done = true;
+  changed(clip);
+}
+
+const next = (clip: Clip) => new Promise<void>((resolve) => clip.waiting.add(resolve));
+
+type CallTarget = { ownerId: string; threadId: string; turnId: string };
+
+function announce(target: CallTarget, streamId: string, sequence: number, id: string) {
+  if (!inCall(target.threadId)) return;
   callAudio({
-    ownerId: input.ownerId,
-    threadId: input.threadId,
-    turnId: input.turnId,
-    streamId: input.streamId,
-    id: keepClip(input.ownerId, input.audio),
-    sequence: input.sequence,
+    ownerId: target.ownerId,
+    threadId: target.threadId,
+    turnId: target.turnId,
+    streamId,
+    id,
+    sequence,
   });
+}
+
+export function playOnCall(
+  input: CallTarget & { streamId: string; sequence: number; audio: GeneratedAudio },
+) {
+  if (!inCall(input.threadId)) return;
+  const { id, clip } = openClip(input.ownerId);
+  append(clip, input.audio.bytes, input.audio.mimeType);
+  close(clip);
+  announce(input, input.streamId, input.sequence, id);
 }
 
 export function callSpeaker(input: {
@@ -71,28 +105,40 @@ export function callSpeaker(input: {
   threadId: string;
   turnId: string;
   signal: AbortSignal;
-  synthesize(text: string): Promise<GeneratedAudio>;
+  synthesize(
+    text: string,
+    stream: (chunk: Buffer, mimeType: string) => void,
+  ): Promise<GeneratedAudio>;
   failed(error: unknown): void;
 }) {
   const pending = new Map<string, string>();
   const voiced = new Set<string>();
   let sequence = 0;
   let order = Promise.resolve();
+  const work: Promise<void>[] = [];
   const speak = (text: string, streamId: string) => {
     const clean = speakable(text).slice(0, 4096);
     if (!clean || input.signal.aborted) return;
     voiced.add(streamId);
     const index = sequence++;
-    const audio = input.synthesize(clean);
-    audio.catch(() => {});
+    const { id, clip } = openClip(input.ownerId);
+    work.push(
+      input
+        .synthesize(clean, (chunk, mimeType) => append(clip, chunk, mimeType))
+        .then(
+          (result) => {
+            if (!clip.chunks.length) append(clip, result.bytes, result.mimeType);
+          },
+          (error) => {
+            if (!input.signal.aborted) input.failed(error);
+          },
+        )
+        .finally(() => close(clip)),
+    );
     order = order.then(async () => {
-      try {
-        const result = await audio;
-        if (input.signal.aborted) return;
-        playOnCall({ ...input, streamId, sequence: index, audio: result });
-      } catch (error) {
-        if (!input.signal.aborted) input.failed(error);
-      }
+      while (!clip.mimeType && !clip.done) await next(clip);
+      if (input.signal.aborted || !clip.chunks.length) return;
+      announce(input, streamId, index, id);
     });
   };
   return {
@@ -119,8 +165,8 @@ export function callSpeaker(input: {
       pending.clear();
       return Boolean(streamId && voiced.has(streamId));
     },
-    finished() {
-      return order;
+    async finished() {
+      await Promise.all([order, ...work]);
     },
   };
 }
@@ -136,13 +182,22 @@ export function registerCalls(app: FastifyInstance, ownerId: string) {
   });
   app.get<{ Params: { id: string } }>('/api/call/audio/:id', async (request, reply) => {
     const clip = clips.get(z.uuid().parse(request.params.id));
-    if (!clip || clip.owner !== ownerId || clip.expires <= Date.now())
-      throw Object.assign(new Error('This call audio is no longer available.'), {
-        statusCode: 404,
-      });
+    const missing = () =>
+      Object.assign(new Error('This call audio is no longer available.'), { statusCode: 404 });
+    if (!clip || clip.owner !== ownerId || clip.expires <= Date.now()) throw missing();
+    while (!clip.mimeType && !clip.done) await next(clip);
+    if (!clip.mimeType) throw missing();
+    async function* read(source: Clip) {
+      let index = 0;
+      while (true) {
+        while (index < source.chunks.length) yield source.chunks[index++];
+        if (source.done) return;
+        await next(source);
+      }
+    }
     return reply
-      .header('Content-Type', clip.audio.mimeType)
+      .header('Content-Type', clip.mimeType)
       .header('Cache-Control', 'no-store')
-      .send(clip.audio.bytes);
+      .send(Readable.from(read(clip)));
   });
 }

@@ -1013,7 +1013,10 @@ export function createPiAgent(options: {
         agentDir: directory,
         modelRuntime: runtime,
         model: sessionModel,
-        thinkingLevel: access?.effort ?? 'high',
+        thinkingLevel:
+          input.quick && !['off', 'minimal'].includes(access?.effort ?? '')
+            ? 'low'
+            : (access?.effort ?? 'high'),
         tools: directTools.map((name) => `+${name}`),
         customTools: tools,
         noTools: 'builtin',

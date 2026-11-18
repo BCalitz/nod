@@ -288,10 +288,12 @@ test(
         if (transcriptionError) throw transcriptionError;
         return transcript;
       },
-      async synthesize(text) {
+      async synthesize(text, _signal, _report, options) {
         spoken.push(text);
+        options?.stream?.(Buffer.from('Synthetic generated '), 'audio/ogg');
         await synthesisGate;
         if (synthesisError) throw synthesisError;
+        options?.stream?.(Buffer.from('audio'), 'audio/ogg');
         return {
           bytes: Buffer.from('Synthetic generated audio'),
           mimeType: 'audio/ogg',
@@ -4282,7 +4284,7 @@ test(
           ).rows;
         const callId = randomUUID();
         const otherCall = randomUUID();
-        const clips: Array<{ turnId: string; streamId: string; sequence: number }> = [];
+        const clips: Array<{ id: string; turnId: string; streamId: string; sequence: number }> = [];
         const listen = (event: ServerEvent) => {
           if (event.type === 'call_audio') clips.push(event);
         };
@@ -4318,7 +4320,16 @@ test(
           assert.equal(spoken.length, before + 2);
           assert.equal(clipsFor(resumed).length, 1);
           assert.equal((await audioMessages(resumed)).length, 0);
+          let open!: () => void;
+          synthesisGate = new Promise<void>((resolve) => {
+            open = resolve;
+          });
           const streamed = await thread.submitUserMessage('Synthetic streamed call reply.');
+          await waitFor(() => clipsFor(streamed.turnId).length === 2);
+          const playing = request('GET', `/api/call/audio/${clipsFor(streamed.turnId)[0]!.id}`);
+          open();
+          synthesisGate = undefined;
+          assert.equal((await playing).body, 'Synthetic generated audio');
           await waitFor(settled(streamed.turnId));
           assert.deepEqual(spoken.slice(before + 2).sort(), [
             'Sure, checking now.',

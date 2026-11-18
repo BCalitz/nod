@@ -1059,6 +1059,7 @@ export function createAgentRuntime(dependencies: {
         ...execution,
         ...(context.model ? { model: context.model } : {}),
         automatic: Boolean(context.automatic),
+        ...(context.speech?.call ? { quick: true } : {}),
         ...(context.proactivity ? { restricted: true, restartable: !context.resumed } : {}),
         ...(context.scheduleCache ? { scheduleCache: context.scheduleCache } : {}),
         ...(sessionId === threadId && !context.proactivity && dependencies.keepWarm

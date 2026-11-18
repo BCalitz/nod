@@ -1964,7 +1964,9 @@ async function executeTurn(turn: any, dependencies: ThreadDependencies) {
             threadId,
             turnId,
             signal,
-            synthesize: fenced((text: string) => dependencies.speech.synthesize(text, signal)),
+            synthesize: fenced((text: string, stream: (chunk: Buffer, mimeType: string) => void) =>
+              dependencies.speech.synthesize(text, signal, { stream }),
+            ),
             failed: (error) => logFailure('call_speech_failed', error, { threadId, turnId }),
           })
         : undefined;

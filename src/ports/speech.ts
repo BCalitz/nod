@@ -6,6 +6,7 @@ export class SpeechProviderError extends Error {
 
 export interface SpeechSynthesisOptions {
   voice?: string;
+  stream?(chunk: Buffer, mimeType: string): void;
 }
 
 export interface GeneratedAudio {

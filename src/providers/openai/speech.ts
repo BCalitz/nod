@@ -174,7 +174,12 @@ export function createOpenAISpeechProvider(options: {
         });
         if (!response.ok)
           throw new SpeechProviderError((await openAIRequestError(response, key)).message);
-        const bytes = await readSpeechResponse(response, 50 * 1024 * 1024, 'OpenAI');
+        const bytes = await readSpeechResponse(
+          response,
+          50 * 1024 * 1024,
+          'OpenAI',
+          synthesis?.stream && ((chunk) => synthesis.stream!(chunk, 'audio/ogg')),
+        );
         if (model === 'tts-1' || model === 'tts-1-hd') {
           usage.costUsd = (Array.from(text).length * (model === 'tts-1' ? 15 : 30)) / 1e6;
           usage.pricing = 'sdk_estimate';

@@ -4,6 +4,7 @@ export async function readSpeechResponse(
   response: Response,
   limit: number,
   provider = 'The voice service',
+  stream?: (chunk: Buffer) => void,
 ) {
   if (!response.ok || !response.body) {
     await response.body?.cancel().catch(() => {});
@@ -29,6 +30,7 @@ export async function readSpeechResponse(
       size += part.value.length;
       if (size > limit) throw new Error('The speech response is too large.');
       chunks.push(part.value);
+      stream?.(Buffer.from(part.value));
     }
   } finally {
     await reader.cancel().catch(() => {});

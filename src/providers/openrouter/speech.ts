@@ -68,7 +68,12 @@ export function createOpenRouterSpeechProvider(options: {
           await response.body?.cancel().catch(() => {});
           throw new Error('Invalid audio response.');
         }
-        const bytes = await readSpeechResponse(response, 50 * 1024 * 1024, 'OpenRouter');
+        const bytes = await readSpeechResponse(
+          response,
+          50 * 1024 * 1024,
+          'OpenRouter',
+          synthesis?.stream && ((chunk) => synthesis.stream!(chunk, 'audio/mpeg')),
+        );
         if (!bytes.length) throw new Error('Invalid audio response.');
         signal?.throwIfAborted();
         usage.status = 'succeeded';

@@ -38,7 +38,7 @@ Before a skill is saved, the memory model replaces names, addresses, contact det
 
 Something Nod picks up from one message is **Mentioned once**: Nod uses it, but as less certain. It becomes **Learned** when a second message repeats it.
 
-Nod selects relevant facts for your current question and searches your earlier messages in the current conversation, so it can answer from the conversation itself, with the date you said it. It can use related concepts to find useful context, so advice can use a preference without the same words. These model steps can make mistakes and count toward usage. During a voice call, Nod skips them and picks notes and messages by matching words, so it can answer sooner. After you reset the conversation, the old one isn't searched.
+Nod picks notes that share words with your current question and searches your earlier messages in the current conversation, so it can answer from the conversation itself, with the date you said it. A fast decision model then keeps only the notes and messages that help with the question, in under a second; it can make mistakes and counts toward usage. Without one, or during a voice call, Nod uses the word matches. Nod's main model also sees your full note index and can search memory for a preference phrased in other words. After you reset the conversation, the old one isn't searched.
 
 ```mermaid
 stateDiagram-v2

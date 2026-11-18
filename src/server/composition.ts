@@ -1039,7 +1039,12 @@ async function initializeApplication(
           }
         : undefined,
   });
-  const memoryRecall = createMemoryRecall({ pool, ownerId, memory, curator });
+  const memoryRecall = createMemoryRecall({
+    pool,
+    ownerId,
+    memory,
+    ...(adapters.trustDecisions ? { decisions: ledger.decisions(adapters.trustDecisions) } : {}),
+  });
   const writingStyle = createWritingStyleLearning({ memory, curator });
   const communication = createCommunication({
     pool,

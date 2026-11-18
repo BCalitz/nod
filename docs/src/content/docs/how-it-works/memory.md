@@ -44,7 +44,7 @@ flowchart TD
 - An **area** lists its entries.
 - An **entry** shows its full text, status, source messages and evidence count. Pi receives only the saved support quote, not the whole source message. An older note without a saved quote keeps its source reference. Settings → Memory offers a link only when the server verifies that the source belongs to the owner’s active conversation. Historical sources keep their saved support quote or available message excerpt. Missing sources remain unavailable; message lookup is never widened to make a link work.
 
-`memory_find` matches words in the slug, abstract and text. This direct tool uses no model or embeddings. Before an owner request, Nod also uses the memory model to select relevant facts and expand search terms.
+`memory_find` matches words in the slug, abstract and text. This direct tool uses no model or embeddings. Before an owner request, Nod also picks relevant facts and earlier messages, as below.
 
 ### Earlier conversation
 
@@ -58,15 +58,15 @@ Before a turn started by an owner message, the server gives Pi six older owner m
 
 ```mermaid
 flowchart TD
-  request[Your request]:::accent --> select[Select facts and expand searches]
+  request[Your request]:::accent --> select[Match notes by their words]
   select --> search[Search the active conversation]
-  search --> rank[Rank facts and source messages]
+  search --> rank[Decision model keeps the relevant ones]
   rank --> answer[Pi answers, streaming as it writes]:::go
 ```
 
-The memory model selects existing notes. It can connect an indirect question to a preference or possession. It expands search terms with related concepts and source names, then ranks the returned messages. The server accepts only note paths and message IDs from the supplied records. Model-written facts do not enter this evidence packet or memory.
+Nod matches up to 12 notes by their words and searches the active conversation with the request. When a decision model is available (the same one the trust check can use: TypeSafe Jev, Perplexity Decider or OpenAI Decisions), one request answers yes or no for each note and up to 20 of the messages: does it help with the current request? Only the yes answers stay. The decision model only chooses among the supplied records, so it can't add facts, paths or messages. If no decision model is connected, or it doesn't answer within 1.5 seconds, Nod keeps the word matches. The main agent still sees the full note index and can search memory itself.
 
-For this selection, Nod sends at most 4,000 characters of the current request and 1,200 characters from each of up to six recent owner messages to the memory model. Long messages keep their beginning and end with an omission marker between them. Full messages remain available through conversation search when the task needs their contents.
+For this selection, Nod sends at most 4,000 characters of the current request and 1,200 characters from each of up to six recent owner messages to the decision model. Long messages keep their beginning and end with an omission marker between them. Full messages remain available through conversation search when the task needs their contents.
 
 The full note index stays available. The selected evidence appears next to the current request, with sources and dates. A note marked **Mentioned once** can still have an exact source. That label records repetition; it does not prove the note is false.
 

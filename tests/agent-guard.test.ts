@@ -3188,17 +3188,11 @@ test(
             pool,
             ownerId,
             memory,
-            curator: {
-              id: 'fixture',
+            decisions: {
               configured: true,
-              async curate({ input }, signal) {
-                if ('mode' in input) return { paths: [path], messages: [] };
+              async check(_request, signal) {
                 await delay(10_000, undefined, { signal });
-                return {
-                  mode: explicit ? 'recall' : 'none',
-                  paths: explicit ? [path] : [],
-                  queries: [],
-                };
+                return { record_0: false };
               },
             },
           });
@@ -3246,7 +3240,11 @@ test(
 test('memory planning bounds pasted requests and recent owner messages', async () => {
   const longText = (start: string, middle: string, end: string) =>
     `${start}${'a'.repeat(16_000)}${middle}${'b'.repeat(16_000)}${end}`;
-  const request = longText('Current question: ', 'MIDDLE_CURRENT', ' Current closing question.');
+  const request = longText(
+    'Current question about synthetic amber light: ',
+    'MIDDLE_CURRENT',
+    ' Current closing question.',
+  );
   const previous = longText('Earlier request: ', 'MIDDLE_PREVIOUS', ' Earlier closing request.');
   const audio = longText('Audio caption: ', 'MIDDLE_AUDIO', ' Audio closing transcript.');
   const pool = { query: async () => ({ rows: [] }) } as unknown as Pool;
@@ -3261,14 +3259,16 @@ test('memory planning bounds pasted requests and recent owner messages', async (
     pool,
     ownerId: 'synthetic-owner',
     memory,
-    curator: {
-      id: 'fixture',
+    decisions: {
       configured: true,
-      async curate({ input }) {
+      async check({ input, additionalQuestions = [] }) {
         inputs.push(input);
-        return 'mode' in input
-          ? { paths: [path], messages: [] }
-          : { mode: 'recall', paths: [path], queries: [] };
+        return {
+          record_0: true,
+          additional: Object.fromEntries(
+            additionalQuestions.map(({ name }) => [name, { [name]: true }]),
+          ),
+        };
       },
     },
   });
@@ -3282,14 +3282,17 @@ test('memory planning bounds pasted requests and recent owner messages', async (
     signal: new AbortController().signal,
   } as Parameters<typeof recall.prepare>[0]);
   assert.equal(brief?.facts[0]?.path, path);
-  assert.equal(inputs.length, 2);
-  const input = inputs[0] as { request: string; recent: Array<{ text: string }> };
-  const ranking = inputs[1] as { request: string; mode: string; notes: Array<{ path: string }> };
+  assert.equal(inputs.length, 1);
+  const input = inputs[0] as {
+    request: string;
+    recent: Array<{ text: string }>;
+    records: Array<{ path?: string }>;
+  };
   assert.ok(input.request.length <= 4_000);
   assert.equal(input.recent.length, 3);
   assert.ok(input.recent.every(({ text }) => text.length <= 1_200));
   assert.ok(input.recent.every((message) => !('audioCaption' in message)));
-  assert.ok(input.request.startsWith('Current question: '));
+  assert.ok(input.request.startsWith('Current question about synthetic amber light: '));
   assert.ok(input.request.endsWith(' Current closing question.'));
   assert.ok(input.request.includes('\n[Middle of message omitted]\n'));
   for (const message of input.recent) {
@@ -3302,10 +3305,8 @@ test('memory planning bounds pasted requests and recent owner messages', async (
   assert.ok(input.recent[2].text.startsWith('Audio caption: '));
   assert.ok(input.recent[2].text.endsWith(' Audio closing transcript.'));
   assert.ok(!JSON.stringify(input).includes('MIDDLE_'));
-  assert.equal(ranking.request, input.request);
-  assert.equal(ranking.mode, 'recall');
   assert.deepEqual(
-    ranking.notes.map(({ path: notePath }) => notePath),
+    input.records.flatMap(({ path: notePath }) => (notePath ? [notePath] : [])),
     [path],
   );
 });

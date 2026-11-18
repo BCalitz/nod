@@ -9,7 +9,6 @@ export interface MemoryCurator {
       task:
         | 'reflect'
         | 'remember'
-        | 'recall'
         | 'review'
         | 'access'
         | 'style'

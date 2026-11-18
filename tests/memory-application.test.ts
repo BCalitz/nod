@@ -1514,21 +1514,24 @@ test(
       pool,
       ownerId: 'owner-a',
       memory,
-      curator: {
-        id: 'fixture',
+      decisions: {
         configured: true,
-        async curate({ task, input }) {
+        async check({ input, question, additionalQuestions = [] }) {
           inputs.push(JSON.stringify(input));
-          return 'mode' in input
-            ? {
-                paths: ['about/maple', 'about/amber', 'about/foreign'],
-                messages: [records[0].id, other.id, old.id],
-              }
-            : {
-                mode: 'aggregate',
-                paths: ['about/maple', 'about/amber', 'about/foreign'],
-                queries: ['Maple'],
-              };
+          const { records: candidates } = input as {
+            records: Array<{ kind: string; path?: string; text: string }>;
+          };
+          const keep = candidates.map((record) =>
+            record.kind === 'note'
+              ? record.path === 'about/maple'
+              : record.text.startsWith('Maple'),
+          );
+          return {
+            [question.name]: keep[0],
+            additional: Object.fromEntries(
+              additionalQuestions.map(({ name }, index) => [name, { [name]: keep[index + 1] }]),
+            ),
+          };
         },
       },
     });
@@ -1543,12 +1546,11 @@ test(
     assert.ok(brief);
     assert.deepEqual(
       brief.facts.map((fact) => fact.path),
-      ['about/maple', 'about/amber'],
+      ['about/maple'],
     );
-    assert.deepEqual(
-      brief.messages.map((message) => message.id),
-      [records[0].id],
-    );
+    const owned = new Set<string>(records.map((record) => record.id));
+    assert.ok(brief.messages.length > 0);
+    assert.ok(brief.messages.every((message) => owned.has(message.id)));
     assert.ok(!inputs.join('\n').includes(privateDetail));
     assert.ok(!inputs.join('\n').includes('Foreign Maple detail.'));
     assert.ok(!inputs.join('\n').includes('Archived Maple detail.'));
